@@ -1,1 +1,0 @@
-This folder cshould contain a folder for Azure scripts and a folder for a container (i.e. Docker)
