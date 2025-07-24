@@ -44,6 +44,21 @@ export interface DeploymentResult {
   errors?: any[]
 }
 
+export interface WorkflowValidationResult {
+  success: boolean
+  validationResult?: any
+  agentResponses?: Array<{
+    name: string
+    response: string
+    confidence: number
+    alignment: number
+    recommendations: string[]
+  }>
+  alignmentScore?: number
+  recommendations?: string[]
+  error?: string
+}
+
 export class AnythingLLMClient {
   private apiKey: string
   private baseUrl: string
@@ -55,7 +70,7 @@ export class AnythingLLMClient {
     this.organizationId = config.organizationId
   }
 
-  private async request<T>(endpoint: string, method = "GET", data?: any): Promise<T> {
+  private async makeRequest<T>(endpoint: string, method = "GET", data?: any): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`
 
     const headers: HeadersInit = {
@@ -88,12 +103,37 @@ export class AnythingLLMClient {
    */
   async testConnection(): Promise<{ success: boolean; message: string }> {
     try {
-      await this.request<{ status: string }>("/api/v1/status")
+      await this.makeRequest<{ status: string }>("/api/v1/status")
       return { success: true, message: "Successfully connected to AnythingLLM API" }
     } catch (error) {
       return {
         success: false,
         message: error instanceof Error ? error.message : "Failed to connect to AnythingLLM API",
+      }
+    }
+  }
+
+  /**
+   * Validate workflow with AnythingLLM
+   */
+  async validateWorkflow(workflowPayload: any): Promise<WorkflowValidationResult> {
+    try {
+      const response = await this.makeRequest<any>("/api/v1/workflows/validate", "POST", workflowPayload)
+
+      return {
+        success: true,
+        validationResult: response,
+        agentResponses: response.agentResponses || [],
+        alignmentScore: response.alignmentScore || 0,
+        recommendations: response.recommendations || [],
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to validate workflow",
+        agentResponses: [],
+        alignmentScore: 0,
+        recommendations: [],
       }
     }
   }
@@ -112,7 +152,7 @@ export class AnythingLLMClient {
       const deployedAgents = await this.deployAgents(agents)
 
       // Then, create the workflow with the deployed agents
-      const workflow = await this.request<any>("/api/v1/workflows", "POST", {
+      const workflow = await this.makeRequest<any>("/api/v1/workflows", "POST", {
         name: workflowName,
         description: workflowDescription,
         agents: deployedAgents.map((agent) => agent.id),
@@ -150,12 +190,12 @@ export class AnythingLLMClient {
 
     for (const agent of agents) {
       // Check if agent already exists
-      const existingAgents = await this.request<any[]>(`/api/v1/agents?name=${encodeURIComponent(agent.name)}`)
+      const existingAgents = await this.makeRequest<any[]>(`/api/v1/agents?name=${encodeURIComponent(agent.name)}`)
 
       let deployedAgent
       if (existingAgents.length > 0) {
         // Update existing agent
-        deployedAgent = await this.request<any>(`/api/v1/agents/${existingAgents[0].id}`, "PUT", {
+        deployedAgent = await this.makeRequest<any>(`/api/v1/agents/${existingAgents[0].id}`, "PUT", {
           name: agent.name,
           type: agent.type,
           description: agent.description,
@@ -166,7 +206,7 @@ export class AnythingLLMClient {
         })
       } else {
         // Create new agent
-        deployedAgent = await this.request<any>("/api/v1/agents", "POST", {
+        deployedAgent = await this.makeRequest<any>("/api/v1/agents", "POST", {
           name: agent.name,
           type: agent.type,
           description: agent.description,
@@ -191,14 +231,14 @@ export class AnythingLLMClient {
    * Get workflow status
    */
   async getWorkflowStatus(workflowId: string): Promise<any> {
-    return this.request<any>(`/api/v1/workflows/${workflowId}`)
+    return this.makeRequest<any>(`/api/v1/workflows/${workflowId}`)
   }
 
   /**
    * Get all workflows
    */
   async getWorkflows(): Promise<any[]> {
-    return this.request<any[]>("/api/v1/workflows")
+    return this.makeRequest<any[]>("/api/v1/workflows")
   }
 }
 

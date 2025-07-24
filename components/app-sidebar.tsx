@@ -40,13 +40,13 @@ const navigationItems = [
     icon: Upload,
   },
   {
-    title: "Agents",
-    url: "/agents",
+    title: "Archetypals",
+    url: "/Archetypals",
     icon: Users,
   },
   {
-    title: "Workflow",
-    url: "/workflow",
+    title: "AnythingLLM",
+    url: "/AnythingLLM",
     icon: GitBranch,
   },
   {
