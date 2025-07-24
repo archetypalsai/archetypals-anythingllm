@@ -1,0 +1,26 @@
+Workflow Overview
+1. Ingest Strategy Documents (OKRs)
+Users upload, paste, or connect a source of OKRs (Objectives and Key Results).
+Supported sources: PDF, text file, or direct integration with apps like OpenProject.
+The OKRs are parsed and embedded in a vector database for semantic querying.
+2. AI-Driven Agent Generation
+The LLM suggests which archetypal agents are needed:
+- Sales Agent (increase revenue)
+- Security Agent (reduce risk, ensure compliance)
+- Marketing Agent (expand market)
+- Governance Agent (align with policies, approve actions)
+The suggested agent flow and the rationale are returned.
+
+3. Archetype Emergence & Customization
+The system instantiates the proposed agents and displays them in the dashboard.
+Users can toggle each agent On/Off based on their workflow needs.
+Each agent’s tasks, responsibilities, and workflow connections are visible and configurable.
+
+4. Agentic Workflow Orchestration
+The app automatically orchestrates agent interactions as per the proposed flow.
+Example: Sales Agent → Governance Agent → Marketing Agent → Security Agent.
+Each agent performs its tasks in sequence or in parallel, triggering the next agent as needed.
+All agent interactions and decisions are logged and auditable.
+5. Performance Tracking & Analytics
+The platform monitors agent performance, user interaction, and workflow outcomes.
+Key metrics and insights are visualized in an analytics dashboard.

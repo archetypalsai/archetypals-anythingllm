@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { GitBranch, Play, Settings, CheckCircle, ArrowDown, Bot, Target, TrendingUp } from "lucide-react"
 import { useRouter } from "next/navigation"
 import {
-  generateWorkflowDescription,
+  //generateWorkflowDescription,
   sendWorkflowToAnythingLLM,
   evaluateAgentAlignment,
 } from "@/lib/workflow-generator"
@@ -79,8 +79,8 @@ export default function WorkflowPage() {
     }, 400)
 
     try {
-      const description = await generateWorkflowDescription()
-      setWorkflowDescription(description)
+      // const description = await generateWorkflowDescription()
+      // setWorkflowDescription(description)
 
       setProgress(100)
       setTimeout(() => {
