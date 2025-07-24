@@ -31,11 +31,4 @@ npm run build    # or yarn build
 npm start        # or yarn start
 
 Deployment
-This project is optimized for deployment on Vercel:
-Push your changes to GitHub.
-Import the repository into Vercel.
-Set environment variables in Vercel’s dashboard (OPENAI_API_KEY, VECTOR_DB_URL, etc.).
-Alternatively, you can deploy to any Node.js‑compatible hosting provider.
-Contributing
-We welcome contributions! Please review CONTRIBUTING.md for guidelines on issues, features, and pull requests.
 
