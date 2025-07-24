@@ -1,7 +1,7 @@
 
 
 # Clone the repository
-git clone https://github.com/your-org/okr-agent-platform.git
+git clone https://github.com/archetypalsai/archetypals-anythingllm.git
 cd okr-agent-platform
 
 # Install dependencies
@@ -12,8 +12,8 @@ Duplicate the example environment file:
 cp .env.example .env.local
 Open .env.local and define:
 NEXT_PUBLIC_OPENAI_API_KEY=your_openai_api_key_here
-VECTOR_DB_URL=https://your-vector-db.endpoint
-VECTOR_DB_API_KEY=your_vector_db_api_key
+ANYTHINGLLM_API_KEY= your_anythingllm_api_key
+ANYTHINGLLM_BASE_URL=your_anythingllm_base_url
 
 Development
 
