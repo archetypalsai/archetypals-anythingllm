@@ -1,4 +1,3 @@
-
 "use client"
 
 import { useState, useEffect } from "react"
@@ -7,10 +6,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Bot, Users, ArrowRight, CheckCircle, Clock, AlertCircle, Settings } from "lucide-react"
+import { useToast } from "@/hooks/use-toast"
+import {
+  Bot,
+  Users,
+  ArrowRight,
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  Settings,
+  Upload,
+  FileText,
+  Loader2,
+} from "lucide-react"
 import { useRouter } from "next/navigation"
-import { generateAgentsFromOKRs } from "@/lib/agent-generator"
-import { isOpenAIConfigured } from "@/lib/api-keys"
+import { generateAgentsFromOKRs, uploadAgentFlowToAnythingLLM } from "@/lib/agent-generator"
+import { isOpenAIConfigured, isAnythingLLMConfigured } from "@/lib/api-keys"
 
 interface Agent {
   id: string
@@ -28,7 +39,14 @@ export default function AgentsPage() {
   const [isGenerating, setIsGenerating] = useState(true)
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState<{
+    success: boolean
+    message: string
+    documentId?: string
+  } | null>(null)
   const router = useRouter()
+  const { toast } = useToast()
 
   useEffect(() => {
     generateAgents()
@@ -56,7 +74,7 @@ export default function AgentsPage() {
       const parsedOKRData = okrData ? JSON.parse(okrData) : null
 
       const { agents: generatedAgents, agenticFlow } = await generateAgentsFromOKRs(
-        parsedOKRData?.content || "Sample OKRs"
+        parsedOKRData?.content || "Sample OKRs",
       )
 
       setProgress(100)
@@ -74,6 +92,52 @@ export default function AgentsPage() {
     }
 
     clearInterval(progressInterval)
+  }
+
+  const handleUploadToAnythingLLM = async () => {
+    if (!isAnythingLLMConfigured()) {
+      toast({
+        title: "Configuration Required",
+        description: "Please configure AnythingLLM API settings before uploading.",
+        variant: "destructive",
+      })
+      router.push("/settings")
+      return
+    }
+
+    setIsUploading(true)
+    setUploadStatus(null)
+
+    try {
+      const result = await uploadAgentFlowToAnythingLLM(agenticFlow, agents)
+      setUploadStatus(result)
+
+      if (result.success) {
+        toast({
+          title: "Upload Successful",
+          description: "Agent Interaction Flow has been uploaded to AnythingLLM.",
+        })
+      } else {
+        toast({
+          title: "Upload Failed",
+          description: result.message,
+          variant: "destructive",
+        })
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to upload"
+      setUploadStatus({
+        success: false,
+        message: errorMessage,
+      })
+      toast({
+        title: "Upload Error",
+        description: errorMessage,
+        variant: "destructive",
+      })
+    } finally {
+      setIsUploading(false)
+    }
   }
 
   const sampleAgents: Agent[] = [
@@ -226,12 +290,43 @@ export default function AgentsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Generated Agents</h1>
           <p className="text-gray-600">AI-generated archetypal agents based on your OKRs</p>
         </div>
-        <Button onClick={() => router.push("/workflow")}>
-          Create Workflow <ArrowRight className="ml-2 h-4 w-4" />
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleUploadToAnythingLLM} disabled={isUploading}>
+            {isUploading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Uploading...
+              </>
+            ) : (
+              <>
+                <Upload className="h-4 w-4 mr-2" />
+                Upload to AnythingLLM
+              </>
+            )}
+          </Button>
+          <Button onClick={() => router.push("/workflow")}>
+            Create Workflow <ArrowRight className="ml-2 h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="container mx-auto px-4 py-8">
+        {/* Upload Status */}
+        {uploadStatus && (
+          <Alert className={`mb-6 ${uploadStatus.success ? "border-green-200 bg-green-50" : ""}`}>
+            <FileText className="h-4 w-4" />
+            <AlertTitle>{uploadStatus.success ? "Upload Successful" : "Upload Failed"}</AlertTitle>
+            <AlertDescription>
+              {uploadStatus.message}
+              {uploadStatus.documentId && (
+                <div className="mt-2 text-sm">
+                  <strong>Document ID:</strong> {uploadStatus.documentId}
+                </div>
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Summary */}
         <Card className="mb-8">
           <CardHeader>
@@ -271,7 +366,7 @@ export default function AgentsPage() {
           <CardContent>
             <div className="prose max-w-none">
               {agenticFlow ? (
-                <p>{agenticFlow}</p>
+                <p className="text-gray-700 leading-relaxed">{agenticFlow}</p>
               ) : (
                 <p className="text-gray-500">No interaction flow description available.</p>
               )}
@@ -332,10 +427,30 @@ export default function AgentsPage() {
         <Card className="mt-8">
           <CardHeader>
             <CardTitle>Next Steps</CardTitle>
-            <CardDescription>Your agents are ready! Proceed to create the workflow orchestration.</CardDescription>
+            <CardDescription>
+              Upload your Agent Interaction Flow to AnythingLLM or proceed to create the workflow orchestration.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col sm:flex-row gap-4">
+              <Button
+                onClick={handleUploadToAnythingLLM}
+                variant="outline"
+                disabled={isUploading}
+                className="flex-1 bg-transparent"
+              >
+                {isUploading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Uploading to AnythingLLM...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload to AnythingLLM
+                  </>
+                )}
+              </Button>
               <Button onClick={() => router.push("/workflow")} className="flex-1">
                 <ArrowRight className="mr-2 h-4 w-4" />
                 Create Agentic Workflow
@@ -350,6 +465,7 @@ export default function AgentsPage() {
     </div>
   )
 }
+
 
 
 

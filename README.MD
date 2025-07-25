@@ -12,7 +12,9 @@ Duplicate the example environment file:
 cp .env.example .env.local
 Open .env.local and define:
 NEXT_PUBLIC_OPENAI_API_KEY=your_openai_api_key_here
+
 ANYTHINGLLM_API_KEY= your_anythingllm_api_key
+
 ANYTHINGLLM_BASE_URL=your_anythingllm_base_url
 
 Development
