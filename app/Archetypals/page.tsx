@@ -428,11 +428,44 @@ export default function AgentsPage() {
           <CardHeader>
             <CardTitle>Next Steps</CardTitle>
             <CardDescription>
-              Upload your Agent Interaction Flow to AnythingLLM or proceed to create the workflow orchestration.
+              Upload your Agent Interaction Flow to AnythingLLM.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col sm:flex-row gap-4">
+            <Button
+              onClick={handleUploadToAnythingLLM}
+              variant="outline"
+              disabled={isUploading}
+              className="
+                flex-1
+                relative
+                overflow-hidden
+                bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500
+                text-white font-semibold
+                py-3 px-5 rounded-2xl
+                shadow-lg
+                transform transition-transform duration-300 ease-out
+                hover:scale-105 hover:shadow-2xl
+                focus:outline-none focus:ring-4 focus:ring-indigo-300
+                disabled:opacity-50 disabled:cursor-not-allowed
+              "
+            >
+              {isUploading ? (
+                <>
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  Uploading…
+                </>
+              ) : (
+                <>
+                  <Upload className="mr-2 h-5 w-5" />
+                  Upload to AnythingLLM
+                </>
+              )}
+            </Button>
+          </div>
+
+            {/* <div className="flex flex-col sm:flex-row gap-4">
               <Button
                 onClick={handleUploadToAnythingLLM}
                 variant="outline"
@@ -451,14 +484,7 @@ export default function AgentsPage() {
                   </>
                 )}
               </Button>
-              <Button onClick={() => router.push("/workflow")} className="flex-1">
-                <ArrowRight className="mr-2 h-4 w-4" />
-                Create Agentic Workflow
-              </Button>
-              <Button variant="outline" onClick={() => router.push("/upload")}>
-                Upload Different OKRs
-              </Button>
-            </div>
+            </div> */}
           </CardContent>
         </Card>
       </div>
