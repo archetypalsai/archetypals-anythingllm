@@ -40,7 +40,7 @@ export default function UploadPage() {
     }
     sessionStorage.setItem("okrData", JSON.stringify(okrData))
 
-    router.push("/agents")
+    router.push("/Archetypals")
   }
 
   return (
