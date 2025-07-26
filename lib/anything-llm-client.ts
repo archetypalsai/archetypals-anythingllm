@@ -1,799 +1,534 @@
 /**
- * AnythingLLM API Client
+ * AnythingLLM Client for API Integration
  *
- * This client handles all interactions with the AnythingLLM API for document upload,
- * agent deployment, and workflow orchestration.
+ * This client handles all interactions with the AnythingLLM API including:
+ * - Connection testing
+ * - Document uploads
+ * - Conversation retrieval with enhanced message extraction
+ * - Latest user message detection using timestamp-based sorting
  */
+
 import { getAnythingLLMConfig } from "./api-keys"
 
 export interface AnythingLLMConfig {
-  apiKey: string
   baseUrl: string
-  organizationId?: string
+  apiKey: string
 }
 
-export interface Agent {
-  id: string
-  name: string
-  type: string
-  description: string
-  responsibilities: string[]
-  okrMapping: string[]
-  status: string
-}
-
-export interface WorkflowStep {
-  id: string
-  agent: string
-  action: string
-  description: string
-  triggers: string[]
-  outputs: string[]
-  approvals?: string[]
-}
-
-export interface DeploymentResult {
+export interface ConversationResult {
   success: boolean
-  deploymentId?: string
   message: string
-  agents: {
-    id: string
-    name: string
-    status: string
-  }[]
-  errors?: any[]
+  latestMessage?: string
+  conversation?: any[]
+  debugInfo?: {
+    totalChats: number
+    totalUserMessages: number
+    latestMessageTimestamp?: string
+    latestMessageChatId?: string
+    recentMessages?: Array<{
+      content: string
+      timestamp: string
+      chatId: string
+    }>
+    extractionMethod: string
+    apiEndpoint: string
+    responseStructure: string
+  }
 }
 
-export interface WorkflowValidationResult {
-  success: boolean
-  validationResult?: any
-  agentResponses?: Array<{
-    name: string
-    response: string
-    confidence: number
-    alignment: number
-    recommendations: string[]
-  }>
-  alignmentScore?: number
-  recommendations?: string[]
-  error?: string
-}
-
-export interface DocumentUploadResult {
+export interface UploadResult {
   success: boolean
   message: string
   documentId?: string
-  fileName?: string
-  fileSize?: number
   debugInfo?: any
 }
 
-export interface SystemStatus {
+export interface ConnectionResult {
   success: boolean
   message: string
-  version?: string
-  status?: string
   debugInfo?: any
 }
 
+/**
+ * AnythingLLM Client Class
+ */
 export class AnythingLLMClient {
-  private apiKey: string
-  private baseUrl: string
-  private organizationId?: string
+  private config: AnythingLLMConfig
 
   constructor(config: AnythingLLMConfig) {
-    this.apiKey = config.apiKey
-    this.baseUrl = config.baseUrl.endsWith("/") ? config.baseUrl.slice(0, -1) : config.baseUrl
-    this.organizationId = config.organizationId
-
-    console.log("🔧 AnythingLLM Client initialized:", {
-      baseUrl: this.baseUrl,
-      hasApiKey: !!this.apiKey,
-      hasOrgId: !!this.organizationId,
-    })
-  }
-
-  private async makeRequest<T>(endpoint: string, method = "GET", data?: any): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`
-    console.log(`📡 Making ${method} request to:`, url)
-
-    const headers: HeadersInit = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${this.apiKey}`,
-      accept: "application/json",
-    }
-
-    if (this.organizationId) {
-      headers["X-Organization-ID"] = this.organizationId
-    }
-
-    const options: RequestInit = {
-      method,
-      headers,
-      body: data ? JSON.stringify(data) : undefined,
-    }
-
-    console.log("📋 Request options:", {
-      method,
-      headers: { ...headers, Authorization: `Bearer ${this.apiKey.substring(0, 10)}...` },
-      hasBody: !!data,
-    })
-
-    try {
-      const response = await fetch(url, options)
-      const responseText = await response.text()
-
-      console.log("📨 Response received:", {
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok,
-        headers: Object.fromEntries(response.headers.entries()),
-        bodyLength: responseText.length,
-        bodyPreview: responseText.substring(0, 500),
-      })
-
-      if (!response.ok) {
-        let errorData = {}
-        try {
-          errorData = JSON.parse(responseText)
-        } catch (e) {
-          errorData = { message: responseText }
-        }
-
-        console.error("❌ API Error:", errorData)
-        throw new Error(
-          `AnythingLLM API Error: ${response.status} ${response.statusText} - ${JSON.stringify(errorData)}`,
-        )
-      }
-
-      // Try to parse as JSON, fallback to text
-      try {
-        const jsonResponse = JSON.parse(responseText)
-        console.log("✅ Parsed JSON response:", jsonResponse)
-        return jsonResponse
-      } catch (e) {
-        console.log("📝 Non-JSON response, returning as text")
-        return responseText as T
-      }
-    } catch (error) {
-      console.error("💥 Request failed:", error)
-      throw error
-    }
+    this.config = config
   }
 
   /**
-   * Test the API connection with multiple endpoints
+   * Parse timestamp from various formats
    */
-  async testConnection(): Promise<SystemStatus> {
-    console.log("🔍 Testing AnythingLLM connection...")
+  private parseTimestamp(timestamp: any): number {
+    if (!timestamp) return 0
 
-    const testEndpoints = [
-      "/api/v1/system/status",
-      "/api/v1/system/info",
-      "/api/v1/workspaces",
-      "/api/system/status",
-      "/api/status",
-      "/health",
-      "/",
+    // If it's already a number
+    if (typeof timestamp === "number") {
+      // If it looks like seconds (less than year 2100 in milliseconds)
+      return timestamp < 4102444800000 ? timestamp * 1000 : timestamp
+    }
+
+    // If it's a string
+    if (typeof timestamp === "string") {
+      // Try parsing as number first
+      const numTimestamp = Number.parseInt(timestamp, 10)
+      if (!isNaN(numTimestamp)) {
+        return numTimestamp < 4102444800000 ? numTimestamp * 1000 : numTimestamp
+      }
+
+      // Try parsing as ISO date
+      const dateTimestamp = new Date(timestamp).getTime()
+      if (!isNaN(dateTimestamp)) {
+        return dateTimestamp
+      }
+    }
+
+    // If it's a Date object
+    if (timestamp instanceof Date) {
+      return timestamp.getTime()
+    }
+
+    return 0
+  }
+
+  /**
+   * Extract user message from a chat object
+   */
+  private extractUserMessageFromChat(chat: any): {
+    content: string
+    timestamp: number
+    chatId: string
+  } | null {
+    if (!chat) {
+      console.log("❌ Chat object is null or undefined")
+      return null
+    }
+
+    console.log("🔍 Extracting user message from chat:", {
+      chatId: chat.id || chat._id || "unknown",
+      hasMessages: !!chat.messages,
+      messagesLength: chat.messages?.length || 0,
+    })
+
+    // First, try to get timestamp for this chat
+    const chatTimestamp = this.parseTimestamp(
+      chat.createdAt || chat.timestamp || chat.sentAt || chat.sent_at || chat.updatedAt,
+    )
+
+    // Try direct fields first
+    const directFields = ["prompt", "user_message", "userMessage", "query", "content", "message"]
+    for (const field of directFields) {
+      const fieldValue = chat[field]
+      if (fieldValue && typeof fieldValue === "string" && fieldValue.trim().length > 0) {
+        console.log(`✅ Found user message in direct field: ${field}`)
+        return {
+          content: fieldValue.trim(),
+          timestamp: chatTimestamp || Date.now(),
+          chatId: chat.id || chat._id || "unknown",
+        }
+      }
+    }
+
+    // Then search through message arrays
+    const messageArrays = ["messages", "conversation", "chats", "history"]
+    for (const arrayField of messageArrays) {
+      const messageArray = chat[arrayField]
+      if (Array.isArray(messageArray) && messageArray.length > 0) {
+        console.log(`🔍 Searching in ${arrayField} array with ${messageArray.length} items`)
+
+        // Find user messages and extract with timestamps
+        const userMessages = messageArray
+          .map((msg: any, index: number) => {
+            if (!msg) return null // Skip null/undefined messages
+
+            // Check if this is a user message
+            const isUserMessage =
+              msg.role === "user" ||
+              msg.type === "user" ||
+              msg.sender === "user" ||
+              msg.from === "user" ||
+              msg.author === "user" ||
+              msg.role === "human" ||
+              msg.type === "human"
+
+            if (!isUserMessage) return null
+
+            // Extract content
+            const content = msg.content || msg.message || msg.text || msg.prompt || msg.query || msg.userMessage
+
+            if (!content || typeof content !== "string" || content.trim().length === 0) return null
+
+            // Extract timestamp
+            const msgTimestamp = this.parseTimestamp(
+              msg.createdAt || msg.timestamp || msg.sentAt || msg.sent_at || msg.updatedAt || msg.time || chatTimestamp,
+            )
+
+            return {
+              content: content.trim(),
+              timestamp: msgTimestamp || chatTimestamp || Date.now() - (1000 - index), // Fallback with ordering
+              chatId: chat.id || chat._id || "unknown",
+              messageIndex: index,
+            }
+          })
+          .filter((msg): msg is NonNullable<typeof msg> => msg !== null) // Type-safe filter
+
+        if (userMessages.length > 0) {
+          // Sort by timestamp and return the latest
+          userMessages.sort((a, b) => b.timestamp - a.timestamp)
+          const latestMessage = userMessages[0]
+          console.log(`✅ Found ${userMessages.length} user messages, selected latest:`, {
+            content: latestMessage.content.substring(0, 100),
+            timestamp: latestMessage.timestamp,
+            timestampDate: new Date(latestMessage.timestamp).toISOString(),
+          })
+          return latestMessage
+        }
+      }
+    }
+
+    console.log("❌ No user message found in this chat")
+    return null
+  }
+
+  /**
+   * Get the latest conversation from AnythingLLM workspace
+   */
+  async getLatestConversation(workspaceSlug: string): Promise<ConversationResult> {
+    if (!workspaceSlug || workspaceSlug.trim().length === 0) {
+      return {
+        success: false,
+        message: "Workspace slug is required",
+        debugInfo: {
+          totalChats: 0,
+          totalUserMessages: 0,
+          extractionMethod: "failed",
+          apiEndpoint: "none",
+          responseStructure: "none",
+        },
+      }
+    }
+
+    console.log(`🌐 Fetching conversations from workspace: ${workspaceSlug}`)
+
+    const endpoints = [
+      `/api/v1/workspace/${workspaceSlug}/chats`,
+      `/api/workspace/${workspaceSlug}/chats`,
+      `/workspace/${workspaceSlug}/chats`,
+      `/api/v1/workspaces/${workspaceSlug}/chats`,
+      `/api/workspaces/${workspaceSlug}/chats`,
     ]
 
-    const testedEndpoints: string[] = []
-
-    for (const endpoint of testEndpoints) {
-      testedEndpoints.push(endpoint)
-
+    for (const endpoint of endpoints) {
       try {
-        console.log(`🌐 Testing endpoint: ${endpoint}`)
+        const url = `${this.config.baseUrl.replace(/\/$/, "")}${endpoint}`
+        console.log(`🔗 Trying endpoint: ${url}`)
 
-        const response = await fetch(`${this.baseUrl}${endpoint}`, {
+        const response = await fetch(url, {
           method: "GET",
           headers: {
-            accept: "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
+            Authorization: `Bearer ${this.config.apiKey}`,
+            "Content-Type": "application/json",
           },
         })
 
-        const responseText = await response.text()
-        console.log(`📡 Endpoint ${endpoint} response:`, {
-          status: response.status,
-          statusText: response.statusText,
-          ok: response.ok,
-          body: responseText.substring(0, 200) + (responseText.length > 200 ? "..." : ""),
+        console.log(`📡 Response status: ${response.status}`)
+
+        if (!response.ok) {
+          console.log(`❌ Endpoint ${endpoint} failed with status ${response.status}`)
+          continue
+        }
+
+        const data = await response.json()
+        if (!data) {
+          console.log(`❌ No data received from ${endpoint}`)
+          continue
+        }
+
+        console.log("📊 Raw API response structure:", {
+          hasHistory: !!data.history,
+          hasChats: !!data.chats,
+          hasConversations: !!data.conversations,
+          hasData: !!data.data,
+          isArray: Array.isArray(data),
+          keys: Object.keys(data),
         })
 
-        if (response.ok) {
-          let parsedResponse = {}
-          try {
-            parsedResponse = JSON.parse(responseText)
-          } catch (e) {
-            parsedResponse = { message: responseText }
-          }
+        // Extract chats from various possible response structures
+        let chats: any[] = []
+        if (Array.isArray(data)) {
+          chats = data.filter((chat) => chat != null) // Filter out null chats
+        } else if (data.history && Array.isArray(data.history)) {
+          chats = data.history.filter((chat: null) => chat != null)
+        } else if (data.chats && Array.isArray(data.chats)) {
+          chats = data.chats.filter((chat: null) => chat != null)
+        } else if (data.conversations && Array.isArray(data.conversations)) {
+          chats = data.conversations.filter((chat: null) => chat != null)
+        } else if (data.data && Array.isArray(data.data)) {
+          chats = data.data.filter((chat: null) => chat != null)
+        }
 
-          return {
-            success: true,
-            message: `Successfully connected to AnythingLLM via ${endpoint}`,
-            status: response.statusText,
-            debugInfo: {
-              endpoint,
-              status: response.status,
-              response: parsedResponse,
-              testedEndpoints,
-            },
+        console.log(`📋 Found ${chats.length} valid chats to process`)
+
+        if (chats.length === 0) {
+          console.log("⚠️ No valid chats found in response")
+          continue
+        }
+
+        // Extract all user messages with timestamps from all chats
+        const allUserMessages: Array<{
+          content: string
+          timestamp: number
+          chatId: string
+        }> = []
+
+        for (const chat of chats) {
+          if (!chat) continue // Skip null chats
+
+          const userMessage = this.extractUserMessageFromChat(chat)
+          if (userMessage) {
+            allUserMessages.push(userMessage)
           }
         }
+
+        console.log(`📝 Extracted ${allUserMessages.length} total user messages`)
+
+        if (allUserMessages.length === 0) {
+          console.log("❌ No user messages found in any chat")
+          continue
+        }
+
+        // Sort all user messages by timestamp (most recent first)
+        allUserMessages.sort((a, b) => {
+          if (a.timestamp === b.timestamp) return 0
+          return b.timestamp - a.timestamp
+        })
+
+        const latestMessage = allUserMessages[0]
+        if (!latestMessage) {
+          console.log("❌ No latest message found after sorting")
+          continue
+        }
+
+        console.log("🎯 Latest user message selected:", {
+          content: latestMessage.content.substring(0, 100) + "...",
+          timestamp: latestMessage.timestamp,
+          timestampDate: new Date(latestMessage.timestamp).toISOString(),
+          chatId: latestMessage.chatId,
+          totalMessages: allUserMessages.length,
+        })
+
+        // Show top 3 most recent messages for debugging
+        const recentMessages = allUserMessages.slice(0, 3).map((msg) => ({
+          content: msg.content.substring(0, 100) + "...",
+          timestamp: new Date(msg.timestamp).toISOString(),
+          chatId: msg.chatId,
+        }))
+
+        return {
+          success: true,
+          message: "Successfully retrieved latest user message",
+          latestMessage: latestMessage.content,
+          conversation: chats,
+          debugInfo: {
+            totalChats: chats.length,
+            totalUserMessages: allUserMessages.length,
+            latestMessageTimestamp: new Date(latestMessage.timestamp).toISOString(),
+            latestMessageChatId: latestMessage.chatId,
+            recentMessages,
+            extractionMethod: "timestamp_based_global_sort",
+            apiEndpoint: endpoint,
+            responseStructure: Array.isArray(data) ? "direct_array" : Object.keys(data).join(","),
+          },
+        }
       } catch (error) {
-        console.log(`⚠️ Endpoint ${endpoint} failed:`, error)
+        console.error(`❌ Error with endpoint ${endpoint}:`, error)
         continue
       }
     }
 
     return {
       success: false,
-      message: "Could not connect to AnythingLLM API. Please check your configuration.",
+      message: "Failed to fetch conversations from all attempted endpoints",
       debugInfo: {
-        testedEndpoints,
-        baseUrl: this.baseUrl,
-        hasApiKey: !!this.apiKey,
+        totalChats: 0,
+        totalUserMessages: 0,
+        extractionMethod: "failed",
+        apiEndpoint: "all_failed",
+        responseStructure: "none",
       },
     }
   }
 
   /**
-   * Upload a document to AnythingLLM
+   * Test connection to AnythingLLM
    */
-  async uploadDocument(
-    content: string,
-    fileName: string,
-    fileType = "text/markdown",
-    workspaceId?: string,
-  ): Promise<DocumentUploadResult> {
-    console.log("📄 Starting document upload...")
-    console.log("📋 Upload parameters:", {
-      fileName,
-      fileType,
-      contentLength: content.length,
-      workspaceId: workspaceId || "none",
-    })
+  async testConnection(): Promise<ConnectionResult> {
+    console.log("🧪 Testing AnythingLLM connection...")
 
-    try {
-      // Create file blob
-      const blob = new Blob([content], { type: fileType })
-      const file = new File([blob], fileName, {
-        type: fileType,
-        lastModified: Date.now(),
-      })
+    const testEndpoints = [
+      "/api/v1/system/ping",
+      "/api/system/ping",
+      "/system/ping",
+      "/api/v1/workspaces",
+      "/api/workspaces",
+      "/workspaces",
+    ]
 
-      console.log("📁 File created:", {
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        lastModified: file.lastModified,
-      })
-
-      // Prepare form data
-      const formData = new FormData()
-      formData.append("file", file)
-
-      if (workspaceId) {
-        formData.append("addToWorkspaces", workspaceId)
-        console.log("🏢 Adding to workspace:", workspaceId)
-      }
-
-      // Try multiple upload endpoints
-      const uploadEndpoints = [
-        "/api/v1/document/upload",
-        "/api/v1/documents/upload",
-        "/api/document/upload",
-        "/api/documents/upload",
-        "/api/upload",
-      ]
-
-      for (const endpoint of uploadEndpoints) {
-        try {
-          const uploadUrl = `${this.baseUrl}${endpoint}`
-          console.log(`🌐 Trying upload endpoint: ${uploadUrl}`)
-
-          const response = await fetch(uploadUrl, {
-            method: "POST",
-            headers: {
-              accept: "application/json",
-              Authorization: `Bearer ${this.apiKey}`,
-            },
-            body: formData,
-          })
-
-          const responseText = await response.text()
-          console.log(`📡 Upload response from ${endpoint}:`, {
-            status: response.status,
-            statusText: response.statusText,
-            ok: response.ok,
-            headers: Object.fromEntries(response.headers.entries()),
-            bodyLength: responseText.length,
-          })
-
-          if (response.ok) {
-            let result = {}
-            try {
-              result = JSON.parse(responseText)
-              console.log("✅ Upload successful, parsed response:", result)
-            } catch (e) {
-              console.log("📝 Upload successful, non-JSON response")
-              result = { message: responseText }
-            }
-
-            return {
-              success: true,
-              message: "Document successfully uploaded to AnythingLLM",
-              documentId: (result as any).documentId || (result as any).id || "unknown",
-              fileName: file.name,
-              fileSize: file.size,
-              debugInfo: {
-                endpoint,
-                uploadUrl,
-                fileSize: file.size,
-                fileName: file.name,
-                responseStatus: response.status,
-                response: result,
-              },
-            }
-          } else {
-            console.log(`❌ Upload failed at ${endpoint}:`, responseText)
-            continue
-          }
-        } catch (error) {
-          console.log(`💥 Upload error at ${endpoint}:`, error)
-          continue
-        }
-      }
-
-      // If all endpoints failed
-      return {
-        success: false,
-        message: "Failed to upload document to any available endpoint",
-        debugInfo: {
-          testedEndpoints: uploadEndpoints,
-          fileName: fileName,
-          fileSize: content.length,
-        },
-      }
-    } catch (error) {
-      console.error("💥 Document upload failed:", error)
-      return {
-        success: false,
-        message: error instanceof Error ? error.message : "Failed to upload document",
-        debugInfo: {
-          error: error instanceof Error ? error.message : "Unknown error",
-          stack: error instanceof Error ? error.stack : undefined,
-        },
-      }
-    }
-  }
-
-  /**
-   * Get list of workspaces
-   */
-  async getWorkspaces(): Promise<{ success: boolean; workspaces: any[]; message: string }> {
-    console.log("🏢 Fetching workspaces...")
-
-    const workspaceEndpoints = ["/api/v1/workspaces", "/api/workspaces", "/api/v1/workspace", "/api/workspace"]
-
-    for (const endpoint of workspaceEndpoints) {
+    for (const endpoint of testEndpoints) {
       try {
-        console.log(`🌐 Trying workspace endpoint: ${endpoint}`)
-        const workspaces = await this.makeRequest<any[]>(endpoint)
+        const url = `${this.config.baseUrl.replace(/\/$/, "")}${endpoint}`
+        console.log(`🔗 Testing endpoint: ${url}`)
 
-        return {
-          success: true,
-          workspaces: Array.isArray(workspaces) ? workspaces : [],
-          message: "Successfully retrieved workspaces",
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${this.config.apiKey}`,
+            "Content-Type": "application/json",
+          },
+        })
+
+        console.log(`📡 Response status: ${response.status}`)
+
+        if (response.ok) {
+          const data = await response.json()
+          return {
+            success: true,
+            message: `Connection successful via ${endpoint}`,
+            debugInfo: {
+              endpoint,
+              status: response.status,
+              response: data,
+            },
+          }
         }
       } catch (error) {
-        console.log(`⚠️ Workspace endpoint ${endpoint} failed:`, error)
+        console.error(`❌ Error testing ${endpoint}:`, error)
         continue
       }
     }
 
     return {
       success: false,
-      workspaces: [],
-      message: "Could not retrieve workspaces from any endpoint",
+      message: "Connection failed on all test endpoints",
+      debugInfo: {
+        testedEndpoints: testEndpoints,
+        baseUrl: this.config.baseUrl,
+      },
     }
   }
 
   /**
-   * Get chats from a specific workspace
+   * Upload document to AnythingLLM
    */
-  async getWorkspaceChats(workspaceSlug: string): Promise<any> {
-    console.log(`💬 Getting chats for workspace: ${workspaceSlug}`)
+  async uploadDocument(
+    content: string,
+    fileName: string,
+    mimeType = "text/markdown",
+    workspaceSlug?: string,
+  ): Promise<UploadResult> {
+    console.log(`📤 Uploading document: ${fileName}`)
 
-    try {
-      const chats = await this.makeRequest<any>(`/api/v1/workspace/${workspaceSlug}/chats`)
-      console.log("📊 Raw chats response:", chats)
-      return chats
-    } catch (error) {
-      console.error(`❌ Failed to get chats for workspace ${workspaceSlug}:`, error)
-      throw error
-    }
-  }
+    const uploadEndpoints = [
+      workspaceSlug ? `/api/v1/workspace/${workspaceSlug}/upload` : "/api/v1/document/upload",
+      workspaceSlug ? `/api/workspace/${workspaceSlug}/upload` : "/api/document/upload",
+      workspaceSlug ? `/workspace/${workspaceSlug}/upload` : "/document/upload",
+    ]
 
-  /**
-   * Get the latest conversation from a workspace
-   */
-  async getLatestConversation(workspaceSlug: string): Promise<{
-    success: boolean
-    latestMessage?: string
-    conversation?: any[]
-    message: string
-    debugInfo?: any
-  }> {
-    console.log(`🔍 Fetching latest conversation from workspace: ${workspaceSlug}`)
-
-    try {
-      const chatsResponse = await this.getWorkspaceChats(workspaceSlug)
-
-      console.log("📊 Chats response structure:", {
-        type: typeof chatsResponse,
-        isArray: Array.isArray(chatsResponse),
-        keys: chatsResponse ? Object.keys(chatsResponse) : [],
-        length: Array.isArray(chatsResponse) ? chatsResponse.length : "N/A",
-      })
-
-      // Handle different possible response structures
-      let chats = []
-
-      if (Array.isArray(chatsResponse)) {
-        chats = chatsResponse
-      } else if (chatsResponse && chatsResponse.chats && Array.isArray(chatsResponse.chats)) {
-        chats = chatsResponse.chats
-      } else if (chatsResponse && chatsResponse.data && Array.isArray(chatsResponse.data)) {
-        chats = chatsResponse.data
-      } else if (chatsResponse && typeof chatsResponse === "object") {
-        // If it's an object, try to find an array property
-        const possibleArrayKeys = ["chats", "data", "messages", "conversations", "history"]
-        for (const key of possibleArrayKeys) {
-          if (chatsResponse[key] && Array.isArray(chatsResponse[key])) {
-            chats = chatsResponse[key]
-            break
-          }
-        }
-      }
-
-      console.log(`📋 Processed chats array:`, {
-        length: chats.length,
-        firstItem: chats.length > 0 ? chats[0] : null,
-        lastItem: chats.length > 0 ? chats[chats.length - 1] : null,
-      })
-
-      if (!chats || chats.length === 0) {
-        return {
-          success: false,
-          message: "No conversations found in workspace",
-          debugInfo: {
-            workspace: workspaceSlug,
-            rawResponse: chatsResponse,
-            processedChats: chats,
-          },
-        }
-      }
-
-      // Get the most recent chat (last item in array)
-      const latestChat = chats[chats.length - 1]
-      console.log("📝 Latest chat object:", latestChat)
-
-      // Extract the user message from various possible structures
-      let latestUserMessage = ""
-
-      // Try different possible field names for the user message
-      const possibleMessageFields = [
-        "prompt",
-        "message",
-        "content",
-        "text",
-        "query",
-        "input",
-        "user_message",
-        "userMessage",
-        "question",
-        "request",
-      ]
-
-      for (const field of possibleMessageFields) {
-        if (latestChat[field] && typeof latestChat[field] === "string") {
-          latestUserMessage = latestChat[field]
-          console.log(`✅ Found user message in field '${field}':`, latestUserMessage.substring(0, 100))
-          break
-        }
-      }
-
-      // If no direct field found, try to look in nested objects
-      if (!latestUserMessage) {
-        if (latestChat.messages && Array.isArray(latestChat.messages)) {
-          // Look for user messages in messages array
-          const userMessages = latestChat.messages.filter(
-            (msg: any) => msg.role === "user" || msg.type === "user" || msg.sender === "user",
-          )
-          if (userMessages.length > 0) {
-            const lastUserMsg = userMessages[userMessages.length - 1]
-            latestUserMessage = lastUserMsg.content || lastUserMsg.message || lastUserMsg.text || ""
-          }
-        }
-      }
-
-      // If still no message found, try to extract from any string field
-      if (!latestUserMessage) {
-        for (const [key, value] of Object.entries(latestChat)) {
-          if (typeof value === "string" && value.length > 10) {
-            latestUserMessage = value
-            console.log(`🔍 Using field '${key}' as fallback message:`, latestUserMessage.substring(0, 100))
-            break
-          }
-        }
-      }
-
-      if (!latestUserMessage) {
-        return {
-          success: false,
-          message: "Could not extract user message from latest conversation",
-          debugInfo: {
-            workspace: workspaceSlug,
-            latestChat: latestChat,
-            availableFields: Object.keys(latestChat),
-          },
-        }
-      }
-
-      return {
-        success: true,
-        latestMessage: latestUserMessage,
-        conversation: chats,
-        message: "Successfully retrieved latest conversation",
-        debugInfo: {
-          workspace: workspaceSlug,
-          chatCount: chats.length,
-          extractedFrom: "API",
-          messageLength: latestUserMessage.length,
-        },
-      }
-    } catch (error) {
-      console.error("❌ Failed to get latest conversation:", error)
-      return {
-        success: false,
-        message: error instanceof Error ? error.message : "Failed to fetch conversation",
-        debugInfo: {
-          workspace: workspaceSlug,
-          error: error instanceof Error ? error.message : "Unknown error",
-          stack: error instanceof Error ? error.stack : undefined,
-        },
-      }
-    }
-  }
-
-  /**
-   * Validate workflow with AnythingLLM
-   */
-  async validateWorkflow(workflowPayload: any): Promise<WorkflowValidationResult> {
-    console.log("🔍 Validating workflow...")
-
-    try {
-      const response = await this.makeRequest<any>("/api/v1/workflows/validate", "POST", workflowPayload)
-
-      return {
-        success: true,
-        validationResult: response,
-        agentResponses: response.agentResponses || [],
-        alignmentScore: response.alignmentScore || 0,
-        recommendations: response.recommendations || [],
-      }
-    } catch (error) {
-      console.error("❌ Workflow validation failed:", error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Failed to validate workflow",
-        agentResponses: [],
-        alignmentScore: 0,
-        recommendations: [],
-      }
-    }
-  }
-
-  /**
-   * Deploy agents and workflow to AnythingLLM
-   */
-  async deployWorkflow(
-    agents: Agent[],
-    workflowSteps: WorkflowStep[],
-    workflowDescription: string,
-    workflowName: string,
-  ): Promise<DeploymentResult> {
-    console.log("🚀 Deploying workflow...")
-    console.log("📋 Deployment parameters:", {
-      workflowName,
-      agentCount: agents.length,
-      stepCount: workflowSteps.length,
-      hasDescription: !!workflowDescription,
-    })
-
-    try {
-      // First, create or update the agents
-      const deployedAgents = await this.deployAgents(agents)
-
-      // Then, create the workflow with the deployed agents
-      const workflow = await this.makeRequest<any>("/api/v1/workflows", "POST", {
-        name: workflowName,
-        description: workflowDescription,
-        agents: deployedAgents.map((agent) => agent.id),
-        steps: workflowSteps.map((step) => ({
-          agentId: deployedAgents.find((a) => a.name === step.agent)?.id,
-          action: step.action,
-          description: step.description,
-          triggers: step.triggers,
-          outputs: step.outputs,
-          approvals: step.approvals || [],
-        })),
-      })
-
-      console.log("✅ Workflow deployed successfully:", workflow)
-
-      return {
-        success: true,
-        deploymentId: workflow.id,
-        message: "Workflow successfully deployed to AnythingLLM",
-        agents: deployedAgents,
-      }
-    } catch (error) {
-      console.error("❌ Workflow deployment failed:", error)
-      return {
-        success: false,
-        message: error instanceof Error ? error.message : "Failed to deploy workflow",
-        agents: [],
-        errors: [error],
-      }
-    }
-  }
-
-  /**
-   * Deploy agents to AnythingLLM
-   */
-  private async deployAgents(agents: Agent[]): Promise<{ id: string; name: string; status: string }[]> {
-    console.log("🤖 Deploying agents...")
-    const deployedAgents = []
-
-    for (const agent of agents) {
+    for (const endpoint of uploadEndpoints) {
       try {
-        console.log(`🔄 Processing agent: ${agent.name}`)
+        const url = `${this.config.baseUrl.replace(/\/$/, "")}${endpoint}`
+        console.log(`🔗 Trying upload endpoint: ${url}`)
 
-        // Check if agent already exists
-        const existingAgents = await this.makeRequest<any[]>(`/api/v1/agents?name=${encodeURIComponent(agent.name)}`)
+        // Create form data
+        const formData = new FormData()
+        const blob = new Blob([content], { type: mimeType })
+        formData.append("file", blob, fileName)
 
-        let deployedAgent
-        if (existingAgents.length > 0) {
-          console.log(`📝 Updating existing agent: ${agent.name}`)
-          // Update existing agent
-          deployedAgent = await this.makeRequest<any>(`/api/v1/agents/${existingAgents[0].id}`, "PUT", {
-            name: agent.name,
-            type: agent.type,
-            description: agent.description,
-            responsibilities: agent.responsibilities,
-            metadata: {
-              okrMapping: agent.okrMapping,
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.config.apiKey}`,
+          },
+          body: formData,
+        })
+
+        console.log(`📡 Upload response status: ${response.status}`)
+
+        if (response.ok) {
+          const data = await response.json()
+          return {
+            success: true,
+            message: "Document uploaded successfully",
+            documentId: data.documentId || data.id,
+            debugInfo: {
+              endpoint,
+              fileName,
+              fileSize: content.length,
+              response: data,
             },
-          })
+          }
         } else {
-          console.log(`➕ Creating new agent: ${agent.name}`)
-          // Create new agent
-          deployedAgent = await this.makeRequest<any>("/api/v1/agents", "POST", {
-            name: agent.name,
-            type: agent.type,
-            description: agent.description,
-            responsibilities: agent.responsibilities,
-            metadata: {
-              okrMapping: agent.okrMapping,
-            },
-          })
+          const errorText = await response.text()
+          console.log(`❌ Upload failed: ${errorText}`)
         }
-
-        deployedAgents.push({
-          id: deployedAgent.id,
-          name: deployedAgent.name,
-          status: deployedAgent.status || "active",
-        })
-
-        console.log(`✅ Agent deployed: ${agent.name}`)
       } catch (error) {
-        console.error(`❌ Failed to deploy agent ${agent.name}:`, error)
-        // Continue with other agents even if one fails
-        deployedAgents.push({
-          id: `error-${agent.id}`,
-          name: agent.name,
-          status: "error",
-        })
+        console.error(`❌ Upload error on ${endpoint}:`, error)
+        continue
       }
     }
 
-    return deployedAgents
-  }
-
-  /**
-   * Get workflow status
-   */
-  async getWorkflowStatus(workflowId: string): Promise<any> {
-    console.log(`📊 Getting workflow status for: ${workflowId}`)
-    return this.makeRequest<any>(`/api/v1/workflows/${workflowId}`)
-  }
-
-  /**
-   * Get all workflows
-   */
-  async getWorkflows(): Promise<any[]> {
-    console.log("📋 Getting all workflows...")
-    return this.makeRequest<any[]>("/api/v1/workflows")
-  }
-
-  /**
-   * Get system information
-   */
-  async getSystemInfo(): Promise<any> {
-    console.log("ℹ️ Getting system information...")
-    return this.makeRequest<any>("/api/v1/system/info")
+    return {
+      success: false,
+      message: "Failed to upload document to all attempted endpoints",
+      debugInfo: {
+        fileName,
+        fileSize: content.length,
+        testedEndpoints: uploadEndpoints,
+      },
+    }
   }
 }
 
-// Create a singleton instance for use throughout the app
-let clientInstance: AnythingLLMClient | null = null
+// Global client instance
+let globalClient: AnythingLLMClient | null = null
 
-export function getAnythingLLMClient(): AnythingLLMClient | null {
-  return clientInstance
-}
+/**
+ * Initialize AnythingLLM client
+ */
+export function initializeAnythingLLMClient(): AnythingLLMClient | null {
+  try {
+    const config = getAnythingLLMConfig()
+    if (!config.baseUrl || !config.apiKey) {
+      console.log("❌ AnythingLLM configuration is incomplete")
+      return null
+    }
 
-export function initializeAnythingLLMClient(config?: AnythingLLMConfig): AnythingLLMClient | null {
-  console.log("🔧 Initializing AnythingLLM client...")
-
-  // If config is provided, use it
-  if (config) {
-    console.log("✅ Using provided config")
-    clientInstance = new AnythingLLMClient(config)
-    return clientInstance
+    globalClient = new AnythingLLMClient(config)
+    console.log("✅ AnythingLLM client initialized successfully")
+    return globalClient
+  } catch (error) {
+    console.error("❌ Failed to initialize AnythingLLM client:", error)
+    return null
   }
-
-  // Otherwise, try to initialize from stored settings
-  const storedConfig = getAnythingLLMConfig()
-  console.log("📋 Stored config check:", {
-    hasApiKey: !!storedConfig.apiKey,
-    hasBaseUrl: !!storedConfig.baseUrl,
-    hasOrgId: !!storedConfig.organizationId,
-  })
-
-  if (storedConfig.apiKey && storedConfig.baseUrl) {
-    console.log("✅ Using stored config")
-    clientInstance = new AnythingLLMClient({
-      apiKey: storedConfig.apiKey,
-      baseUrl: storedConfig.baseUrl,
-      organizationId: storedConfig.organizationId,
-    })
-    return clientInstance
-  }
-
-  console.log("❌ No valid config available")
-  // If no config available, return null
-  return null
 }
 
 /**
- * Helper function to test document upload specifically
+ * Get the global AnythingLLM client instance
  */
-export async function testDocumentUpload(
-  content = "# Test Document\n\nThis is a test document for AnythingLLM upload functionality.",
-  fileName = `test-document-${Date.now()}.md`,
-): Promise<DocumentUploadResult> {
-  console.log("🧪 Testing document upload...")
-
-  const client = getAnythingLLMClient()
-  if (!client) {
-    return {
-      success: false,
-      message: "AnythingLLM client is not initialized. Please configure your API settings.",
-    }
+export function getAnythingLLMClient(): AnythingLLMClient | null {
+  if (!globalClient) {
+    return initializeAnythingLLMClient()
   }
+  return globalClient
+}
 
-  return client.uploadDocument(content, fileName)
+/**
+ * Reset the global client (useful for configuration changes)
+ */
+export function resetAnythingLLMClient(): void {
+  globalClient = null
+  console.log("🔄 AnythingLLM client reset")
 }

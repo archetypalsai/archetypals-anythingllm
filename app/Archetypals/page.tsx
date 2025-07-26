@@ -24,11 +24,14 @@ import {
   Info,
   MessageSquare,
   Zap,
-  Lightbulb,
   Brain,
   Star,
   Building,
   Bug,
+  User,
+  MessageCircle,
+  Calendar,
+  Hash,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import {
@@ -50,7 +53,7 @@ interface Agent {
   expertise: string[]
   personality: string
   optimalThought: string
-  importanceScore: number // New field for importance scoring
+  importanceScore: number
 }
 
 interface ConversationInsights {
@@ -103,7 +106,7 @@ export default function AgentsPage() {
     setFetchAnalysis(null)
 
     try {
-      console.log(`🚀 Fetching latest message from workspace: ${workspaceSlug}`)
+      console.log(`🚀 Fetching latest USER MESSAGE from workspace: ${workspaceSlug}`)
       const { conversationData, analysis } = await fetchAndAnalyzeLatestConversation(workspaceSlug)
 
       console.log("📊 Fetch result:", {
@@ -117,20 +120,20 @@ export default function AgentsPage() {
 
       if (conversationData && conversationData !== "Error fetching conversation data" && !analysis.error) {
         toast({
-          title: "User Message Retrieved",
-          description: `Successfully retrieved message from ${analysis.source} (${conversationData.length} chars)`,
+          title: "Latest User Message Retrieved",
+          description: `Successfully retrieved the most recent user message from ${analysis.source} (${conversationData.length} chars)`,
         })
         console.log("📊 Message analysis:", analysis)
       } else if (analysis.source === "sample") {
         toast({
           title: "Using Sample Data",
-          description: "No real conversation found, using sample message for demonstration.",
+          description: "No real user message found, using sample message for demonstration.",
           variant: "default",
         })
       } else {
         toast({
           title: "Fetch Issue",
-          description: analysis.error || "Could not retrieve real conversation data",
+          description: analysis.error || "Could not retrieve real user message",
           variant: "destructive",
         })
       }
@@ -187,7 +190,7 @@ export default function AgentsPage() {
         setIsGenerating(false)
         toast({
           title: "Archetypal Agents Generated",
-          description: `Successfully generated ${result.agents.length} archetypal agents with optimal responses for your question.`,
+          description: `Successfully generated ${result.agents.length} archetypal agents with specific answers to the user's question.`,
         })
       }, 500)
     } catch (error) {
@@ -411,15 +414,17 @@ export default function AgentsPage() {
           <CardHeader className="text-center">
             <Brain className="h-12 w-12 text-blue-600 mx-auto mb-4" />
             <CardTitle>Generating Archetypal Agents</CardTitle>
-            <CardDescription>Creating specialized agents with optimal responses for your question...</CardDescription>
+            <CardDescription>
+              Creating specialized agents with specific answers to the user's question...
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <Progress value={progress} className="mb-4" />
             <p className="text-sm text-gray-600 text-center">
-              {progress < 30 && "Analyzing your question..."}
-              {progress >= 30 && progress < 60 && "Determining agent importance..."}
-              {progress >= 60 && progress < 90 && "Generating optimal responses..."}
-              {progress >= 90 && "Finalizing archetypal agents..."}
+              {progress < 30 && "Analyzing the user's question..."}
+              {progress >= 30 && progress < 60 && "Determining relevant agent types..."}
+              {progress >= 60 && progress < 90 && "Generating specific agent responses..."}
+              {progress >= 90 && "Finalizing archetypal agent answers..."}
             </p>
           </CardContent>
         </Card>
@@ -432,8 +437,8 @@ export default function AgentsPage() {
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Archetypal Agent Response System</h1>
         <p className="text-gray-600">
-          Generate specialized archetypal agents (Sales, Security, Governance, Marketing) that provide optimal responses
-          to user questions
+          Generate specialized archetypal agents (Sales, Security, Governance, Marketing) that provide specific answers
+          to user questions based on the latest user message from your workspace
         </p>
       </div>
 
@@ -444,7 +449,7 @@ export default function AgentsPage() {
             <Building className="h-5 w-5 mr-2" />
             Workspace Configuration
           </CardTitle>
-          <CardDescription>Configure the AnythingLLM workspace to fetch conversations from</CardDescription>
+          <CardDescription>Configure the AnythingLLM workspace to fetch the latest user messages from</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex gap-4 items-end">
@@ -466,8 +471,8 @@ export default function AgentsPage() {
                 </>
               ) : (
                 <>
-                  <MessageSquare className="h-4 w-4 mr-2" />
-                  Fetch Latest Message
+                  <User className="h-4 w-4 mr-2" />
+                  Fetch Latest User Message
                 </>
               )}
             </Button>
@@ -481,16 +486,19 @@ export default function AgentsPage() {
           <CardHeader>
             <CardTitle className="flex items-center">
               <Bug className="h-5 w-5 mr-2" />
-              Fetch Analysis
+              Message Fetch Analysis
             </CardTitle>
-            <CardDescription>Debug information about the message fetch process</CardDescription>
+            <CardDescription>Debug information about the latest user message extraction process</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label className="text-sm font-medium">Data Source</Label>
                 <Badge className={getSourceColor(fetchAnalysis.source)} variant="secondary">
-                  {fetchAnalysis.source}
+                  {fetchAnalysis.source === "anythingllm_api" && "🌐 AnythingLLM API"}
+                  {fetchAnalysis.source === "sessionStorage_fallback" && "💾 Session Storage"}
+                  {fetchAnalysis.source === "sample" && "🧪 Sample Data"}
+                  {fetchAnalysis.source === "error" && "❌ Error"}
                 </Badge>
               </div>
               <div>
@@ -505,8 +513,26 @@ export default function AgentsPage() {
               )}
               {fetchAnalysis.conversationCount !== undefined && (
                 <div>
-                  <Label className="text-sm font-medium">Conversation Count</Label>
+                  <Label className="text-sm font-medium">Total Conversations</Label>
                   <p className="text-sm text-gray-600">{fetchAnalysis.conversationCount}</p>
+                </div>
+              )}
+              {fetchAnalysis.debugInfo?.latestMessageTimestamp && (
+                <div>
+                  <Label className="text-sm font-medium flex items-center">
+                    <Calendar className="h-3 w-3 mr-1" />
+                    Latest Message Time
+                  </Label>
+                  <p className="text-sm text-gray-600">{fetchAnalysis.debugInfo.latestMessageTimestamp}</p>
+                </div>
+              )}
+              {fetchAnalysis.debugInfo?.latestChatId && (
+                <div>
+                  <Label className="text-sm font-medium flex items-center">
+                    <Hash className="h-3 w-3 mr-1" />
+                    Chat ID
+                  </Label>
+                  <p className="text-sm text-gray-600">{fetchAnalysis.debugInfo.latestChatId}</p>
                 </div>
               )}
               {fetchAnalysis.error && (
@@ -546,7 +572,7 @@ export default function AgentsPage() {
             ) : (
               <>
                 <Zap className="h-4 w-4 mr-2" />
-                Generate Archetypal Agents
+                Generate Agent Responses
               </>
             )}
           </Button>
@@ -640,11 +666,17 @@ export default function AgentsPage() {
           </CardHeader>
           <CardContent className="text-blue-700">
             <ol className="list-decimal list-inside space-y-2 text-sm">
-              <li>Configure your AnythingLLM workspace slug and click "Fetch Latest Message"</li>
-              <li>The system will retrieve the latest user question from your AnythingLLM workspace</li>
-              <li>Click "Generate Archetypal Agents" to create specialized agents from the four archetypes</li>
+              <li>Configure your AnythingLLM workspace slug and click "Fetch Latest User Message"</li>
+              <li>
+                The system will retrieve the <strong>most recent user question</strong> (sorted by timestamp) from your
+                workspace
+              </li>
+              <li>Click "Generate Agent Responses" to create specialized agents from the four archetypes</li>
               <li>Only the most relevant agents (Sales, Security, Governance, Marketing) will be generated</li>
-              <li>Each agent provides their optimal thought/response with an importance score (1-10)</li>
+              <li>
+                Each agent provides their <strong>specific answer</strong> to the user's question from their expertise
+                area
+              </li>
               <li>Upload the agent response system back to AnythingLLM for future use</li>
             </ol>
           </CardContent>
@@ -655,19 +687,32 @@ export default function AgentsPage() {
           <Card className="mb-8">
             <CardHeader>
               <CardTitle className="flex items-center">
-                <MessageSquare className="h-6 w-6 mr-2" />
-                User Question from Workspace: {workspaceSlug}
+                <MessageCircle className="h-6 w-6 mr-2" />
+                Latest User Question from Workspace: {workspaceSlug}
                 {fetchAnalysis && (
                   <Badge className={`ml-2 ${getSourceColor(fetchAnalysis.source)}`} variant="secondary">
-                    {fetchAnalysis.source}
+                    {fetchAnalysis.source === "anythingllm_api" && "🌐 API"}
+                    {fetchAnalysis.source === "sessionStorage_fallback" && "💾 Storage"}
+                    {fetchAnalysis.source === "sample" && "🧪 Sample"}
+                    {fetchAnalysis.source === "error" && "❌ Error"}
                   </Badge>
                 )}
               </CardTitle>
-              <CardDescription>The question that archetypal agents will provide optimal responses for</CardDescription>
+              <CardDescription>
+                The most recent user question that archetypal agents will provide specific answers for
+                {fetchAnalysis?.debugInfo?.latestMessageTimestamp && (
+                  <span className="block mt-1 text-xs text-gray-500">
+                    Message timestamp: {fetchAnalysis.debugInfo.latestMessageTimestamp}
+                  </span>
+                )}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-400">
-                <p className="text-gray-800 font-medium">{userMessage}</p>
+                <div className="flex items-start">
+                  <User className="h-5 w-5 text-blue-600 mr-2 mt-0.5 flex-shrink-0" />
+                  <p className="text-gray-800 font-medium">{userMessage}</p>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -788,7 +833,7 @@ export default function AgentsPage() {
           </Card>
         )}
 
-        {/* Agents Grid with Importance Scores */}
+        {/* Agents Grid with Specific Answers */}
         {agents.length > 0 && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {agents.map((agent) => (
@@ -816,13 +861,13 @@ export default function AgentsPage() {
                 <CardContent>
                   <p className="text-gray-600 mb-4">{agent.description}</p>
 
-                  {/* Optimal Thought - New prominent section */}
-                  <div className="mb-4 p-4 bg-yellow-50 border-l-4 border-yellow-400 rounded-r-lg">
+                  {/* Agent's Specific Answer - Most prominent section */}
+                  <div className="mb-4 p-4 bg-gradient-to-r from-yellow-50 to-orange-50 border-l-4 border-yellow-400 rounded-r-lg">
                     <h4 className="font-semibold mb-2 text-yellow-800 flex items-center">
-                      <Lightbulb className="h-4 w-4 mr-2" />
-                      Optimal Thought:
+                      <MessageSquare className="h-4 w-4 mr-2" />
+                      Agent's Answer to User Question:
                     </h4>
-                    <p className="text-sm text-yellow-900 leading-relaxed">{agent.optimalThought}</p>
+                    <p className="text-sm text-yellow-900 leading-relaxed font-medium">{agent.optimalThought}</p>
                   </div>
 
                   <div className="mb-4">
@@ -854,7 +899,7 @@ export default function AgentsPage() {
                   </div>
 
                   <div>
-                    <h4 className="font-semibold mb-2">Response Focus:</h4>
+                    <h4 className="font-semibold mb-2">Response Focus Areas:</h4>
                     <ul className="text-sm text-gray-600 space-y-1">
                       {agent.conversationMapping.map((mapping, index) => (
                         <li key={index} className="flex items-start">
@@ -913,7 +958,7 @@ export default function AgentsPage() {
                   ) : (
                     <>
                       <Upload className="mr-2 h-4 w-4" />
-                      Upload Agent System
+                      Upload Agent Responses
                     </>
                   )}
                 </Button>
