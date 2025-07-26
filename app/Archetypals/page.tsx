@@ -1,12 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { useToast } from "@/hooks/use-toast"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Bot,
   Users,
@@ -22,6 +24,11 @@ import {
   Info,
   MessageSquare,
   Zap,
+  Lightbulb,
+  Brain,
+  Star,
+  Building,
+  Bug,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import {
@@ -34,7 +41,7 @@ import { isOpenAIConfigured, isAnythingLLMConfigured } from "@/lib/api-keys"
 
 interface Agent {
   id: string
-  name: string
+  name: "SalesAgent" | "SecurityAgent" | "GovernanceAgent" | "MarketingAgent"
   type: string
   description: string
   responsibilities: string[]
@@ -42,6 +49,8 @@ interface Agent {
   status: "active" | "pending" | "offline"
   expertise: string[]
   personality: string
+  optimalThought: string
+  importanceScore: number // New field for importance scoring
 }
 
 interface ConversationInsights {
@@ -55,7 +64,9 @@ export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [agenticFlow, setAgenticFlow] = useState<string>("")
   const [conversationInsights, setConversationInsights] = useState<ConversationInsights | null>(null)
-  const [conversationData, setConversationData] = useState<string>("")
+  const [userMessage, setUserMessage] = useState<string>("")
+  const [workspaceSlug, setWorkspaceSlug] = useState<string>("archetypals")
+  const [fetchAnalysis, setFetchAnalysis] = useState<any>(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [isFetching, setIsFetching] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -76,7 +87,12 @@ export default function AgentsPage() {
   const router = useRouter()
   const { toast } = useToast()
 
-  const fetchLatestConversation = async () => {
+  // Auto-fetch conversation on component mount
+  useEffect(() => {
+    fetchLatestUserMessage()
+  }, [])
+
+  const fetchLatestUserMessage = async () => {
     if (!isAnythingLLMConfigured()) {
       setError("AnythingLLM is not configured. Please configure it in the settings.")
       return
@@ -84,23 +100,46 @@ export default function AgentsPage() {
 
     setIsFetching(true)
     setError(null)
+    setFetchAnalysis(null)
 
     try {
-      const { conversationData, analysis } = await fetchAndAnalyzeLatestConversation()
-      setConversationData(conversationData)
+      console.log(`🚀 Fetching latest message from workspace: ${workspaceSlug}`)
+      const { conversationData, analysis } = await fetchAndAnalyzeLatestConversation(workspaceSlug)
 
-      toast({
-        title: "Conversation Fetched",
-        description: "Successfully retrieved the latest conversation from AnythingLLM.",
+      console.log("📊 Fetch result:", {
+        messageLength: conversationData.length,
+        source: analysis.source,
+        hasError: !!analysis.error,
       })
 
-      console.log("📊 Conversation analysis:", analysis)
+      setUserMessage(conversationData)
+      setFetchAnalysis(analysis)
+
+      if (conversationData && conversationData !== "Error fetching conversation data" && !analysis.error) {
+        toast({
+          title: "User Message Retrieved",
+          description: `Successfully retrieved message from ${analysis.source} (${conversationData.length} chars)`,
+        })
+        console.log("📊 Message analysis:", analysis)
+      } else if (analysis.source === "sample") {
+        toast({
+          title: "Using Sample Data",
+          description: "No real conversation found, using sample message for demonstration.",
+          variant: "default",
+        })
+      } else {
+        toast({
+          title: "Fetch Issue",
+          description: analysis.error || "Could not retrieve real conversation data",
+          variant: "destructive",
+        })
+      }
     } catch (error) {
-      console.error("Error fetching conversation:", error)
-      setError(error instanceof Error ? error.message : "Failed to fetch conversation")
+      console.error("Error fetching user message:", error)
+      setError(error instanceof Error ? error.message : "Failed to fetch user message")
       toast({
         title: "Fetch Failed",
-        description: error instanceof Error ? error.message : "Failed to fetch conversation",
+        description: error instanceof Error ? error.message : "Failed to fetch user message",
         variant: "destructive",
       })
     } finally {
@@ -109,10 +148,10 @@ export default function AgentsPage() {
   }
 
   const generateAgents = async () => {
-    if (!conversationData) {
+    if (!userMessage) {
       toast({
-        title: "No Conversation Data",
-        description: "Please fetch a conversation first before generating agents.",
+        title: "No User Message",
+        description: "Please fetch a user message first before generating agents.",
         variant: "destructive",
       })
       return
@@ -138,18 +177,17 @@ export default function AgentsPage() {
     }, 300)
 
     try {
-      const result = await generateAgentsFromConversation(conversationData)
-
+      const result = await generateAgentsFromConversation(userMessage)
       setProgress(100)
+
       setTimeout(() => {
         setAgents(result.agents)
         setAgenticFlow(result.agenticFlow)
         setConversationInsights(result.conversationInsights)
         setIsGenerating(false)
-
         toast({
-          title: "Agents Generated",
-          description: `Successfully generated ${result.agents.length} archetypal agents based on conversation analysis.`,
+          title: "Archetypal Agents Generated",
+          description: `Successfully generated ${result.agents.length} archetypal agents with optimal responses for your question.`,
         })
       }, 500)
     } catch (error) {
@@ -157,7 +195,6 @@ export default function AgentsPage() {
       setError(error instanceof Error ? error.message : "Failed to generate agents")
       setIsGenerating(false)
       setProgress(100)
-
       toast({
         title: "Generation Failed",
         description: error instanceof Error ? error.message : "Failed to generate agents",
@@ -225,7 +262,7 @@ export default function AgentsPage() {
       return
     }
 
-    if (!agents.length || !conversationInsights) {
+    if (!agents.length) {
       toast({
         title: "No Agents to Upload",
         description: "Please generate agents first before uploading.",
@@ -238,13 +275,13 @@ export default function AgentsPage() {
     setUploadStatus(null)
 
     try {
-      const result = await uploadAgentFlowToAnythingLLM(agenticFlow, agents, conversationInsights)
+      const result = await uploadAgentFlowToAnythingLLM(agenticFlow, agents)
       setUploadStatus(result)
 
       if (result.success) {
         toast({
           title: "Upload Successful",
-          description: "Conversation-based Agent System has been uploaded to AnythingLLM.",
+          description: "Archetypal Agent Response System has been uploaded to AnythingLLM.",
         })
       } else {
         toast({
@@ -291,7 +328,44 @@ export default function AgentsPage() {
     }
   }
 
-  if (error && !conversationData) {
+  const getImportanceColor = (score: number) => {
+    if (score >= 8) return "bg-red-100 text-red-800"
+    if (score >= 6) return "bg-orange-100 text-orange-800"
+    if (score >= 4) return "bg-yellow-100 text-yellow-800"
+    return "bg-gray-100 text-gray-800"
+  }
+
+  const getAgentIcon = (name: Agent["name"]) => {
+    switch (name) {
+      case "SalesAgent":
+        return "💰"
+      case "SecurityAgent":
+        return "🔒"
+      case "GovernanceAgent":
+        return "⚖️"
+      case "MarketingAgent":
+        return "📢"
+      default:
+        return "🤖"
+    }
+  }
+
+  const getSourceColor = (source: string) => {
+    switch (source) {
+      case "anythingllm_api":
+        return "bg-green-100 text-green-800"
+      case "sessionStorage_fallback":
+        return "bg-yellow-100 text-yellow-800"
+      case "sample":
+        return "bg-blue-100 text-blue-800"
+      case "error":
+        return "bg-red-100 text-red-800"
+      default:
+        return "bg-gray-100 text-gray-800"
+    }
+  }
+
+  if (error && !userMessage) {
     return (
       <div className="min-h-screen bg-gray-50">
         <header className="border-b bg-white">
@@ -301,8 +375,8 @@ export default function AgentsPage() {
                 ← Back
               </Button>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Conversation-Based Agent Generation</h1>
-                <p className="text-gray-600">Generate AI agents based on AnythingLLM conversation analysis</p>
+                <h1 className="text-2xl font-bold text-gray-900">Archetypal Agent Response System</h1>
+                <p className="text-gray-600">Generate specialized archetypal agents to answer user questions</p>
               </div>
             </div>
           </div>
@@ -312,7 +386,7 @@ export default function AgentsPage() {
           <Card className="max-w-2xl mx-auto">
             <CardHeader>
               <CardTitle>Configuration Required</CardTitle>
-              <CardDescription>An error occurred while setting up the agent generation system</CardDescription>
+              <CardDescription>An error occurred while setting up the archetypal agent system</CardDescription>
             </CardHeader>
             <CardContent>
               <Alert variant="destructive" className="mb-6">
@@ -335,17 +409,17 @@ export default function AgentsPage() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
-            <Bot className="h-12 w-12 text-blue-600 mx-auto mb-4" />
-            <CardTitle>Generating Conversation-Based Agents</CardTitle>
-            <CardDescription>Analyzing conversation patterns and creating specialized agents...</CardDescription>
+            <Brain className="h-12 w-12 text-blue-600 mx-auto mb-4" />
+            <CardTitle>Generating Archetypal Agents</CardTitle>
+            <CardDescription>Creating specialized agents with optimal responses for your question...</CardDescription>
           </CardHeader>
           <CardContent>
             <Progress value={progress} className="mb-4" />
             <p className="text-sm text-gray-600 text-center">
-              {progress < 30 && "Analyzing conversation patterns..."}
-              {progress >= 30 && progress < 60 && "Identifying user needs and gaps..."}
-              {progress >= 60 && progress < 90 && "Generating specialized agents..."}
-              {progress >= 90 && "Finalizing agent configurations..."}
+              {progress < 30 && "Analyzing your question..."}
+              {progress >= 30 && progress < 60 && "Determining agent importance..."}
+              {progress >= 60 && progress < 90 && "Generating optimal responses..."}
+              {progress >= 90 && "Finalizing archetypal agents..."}
             </p>
           </CardContent>
         </Card>
@@ -356,29 +430,114 @@ export default function AgentsPage() {
   return (
     <div className="flex flex-1 flex-col">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Conversation-Based Agent Generation</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Archetypal Agent Response System</h1>
         <p className="text-gray-600">
-          Analyze conversations from AnythingLLM and generate specialized agents to improve future interactions
+          Generate specialized archetypal agents (Sales, Security, Governance, Marketing) that provide optimal responses
+          to user questions
         </p>
       </div>
+
+      {/* Workspace Configuration */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center">
+            <Building className="h-5 w-5 mr-2" />
+            Workspace Configuration
+          </CardTitle>
+          <CardDescription>Configure the AnythingLLM workspace to fetch conversations from</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-4 items-end">
+            <div className="flex-1">
+              <Label htmlFor="workspace">Workspace Slug</Label>
+              <Input
+                id="workspace"
+                value={workspaceSlug}
+                onChange={(e) => setWorkspaceSlug(e.target.value)}
+                placeholder="archetypals"
+                className="mt-1"
+              />
+            </div>
+            <Button onClick={fetchLatestUserMessage} disabled={isFetching} variant="outline">
+              {isFetching ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Fetching...
+                </>
+              ) : (
+                <>
+                  <MessageSquare className="h-4 w-4 mr-2" />
+                  Fetch Latest Message
+                </>
+              )}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Fetch Analysis Debug Info */}
+      {fetchAnalysis && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center">
+              <Bug className="h-5 w-5 mr-2" />
+              Fetch Analysis
+            </CardTitle>
+            <CardDescription>Debug information about the message fetch process</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Data Source</Label>
+                <Badge className={getSourceColor(fetchAnalysis.source)} variant="secondary">
+                  {fetchAnalysis.source}
+                </Badge>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Timestamp</Label>
+                <p className="text-sm text-gray-600">{new Date(fetchAnalysis.timestamp).toLocaleString()}</p>
+              </div>
+              {fetchAnalysis.workspace && (
+                <div>
+                  <Label className="text-sm font-medium">Workspace</Label>
+                  <p className="text-sm text-gray-600">{fetchAnalysis.workspace}</p>
+                </div>
+              )}
+              {fetchAnalysis.conversationCount !== undefined && (
+                <div>
+                  <Label className="text-sm font-medium">Conversation Count</Label>
+                  <p className="text-sm text-gray-600">{fetchAnalysis.conversationCount}</p>
+                </div>
+              )}
+              {fetchAnalysis.error && (
+                <div className="md:col-span-2">
+                  <Label className="text-sm font-medium text-red-600">Error</Label>
+                  <p className="text-sm text-red-600">{fetchAnalysis.error}</p>
+                </div>
+              )}
+              {fetchAnalysis.reason && (
+                <div className="md:col-span-2">
+                  <Label className="text-sm font-medium text-blue-600">Reason</Label>
+                  <p className="text-sm text-blue-600">{fetchAnalysis.reason}</p>
+                </div>
+              )}
+            </div>
+            {fetchAnalysis.debugInfo && (
+              <details className="mt-4">
+                <summary className="cursor-pointer text-sm font-medium">Debug Information</summary>
+                <pre className="mt-2 text-xs bg-gray-100 p-2 rounded overflow-auto max-h-40">
+                  {JSON.stringify(fetchAnalysis.debugInfo, null, 2)}
+                </pre>
+              </details>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Action Buttons */}
       <div className="flex justify-between items-center mb-8">
         <div className="flex gap-2">
-          <Button onClick={fetchLatestConversation} disabled={isFetching} variant="outline">
-            {isFetching ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Fetching...
-              </>
-            ) : (
-              <>
-                <MessageSquare className="h-4 w-4 mr-2" />
-                Fetch Latest Conversation
-              </>
-            )}
-          </Button>
-          <Button onClick={generateAgents} disabled={!conversationData || isGenerating}>
+          <Button onClick={generateAgents} disabled={!userMessage || isGenerating}>
             {isGenerating ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -387,7 +546,7 @@ export default function AgentsPage() {
             ) : (
               <>
                 <Zap className="h-4 w-4 mr-2" />
-                Generate Agents
+                Generate Archetypal Agents
               </>
             )}
           </Button>
@@ -481,28 +640,34 @@ export default function AgentsPage() {
           </CardHeader>
           <CardContent className="text-blue-700">
             <ol className="list-decimal list-inside space-y-2 text-sm">
-              <li>Click "Fetch Latest Conversation" to retrieve the most recent conversation from AnythingLLM</li>
-              <li>Review the conversation data and click "Generate Agents" to create specialized agents</li>
-              <li>The AI will analyze the conversation to identify user needs, response gaps, and improvement areas</li>
-              <li>Specialized agents will be generated with specific expertise to address these needs</li>
-              <li>Upload the agent system back to AnythingLLM for future use</li>
+              <li>Configure your AnythingLLM workspace slug and click "Fetch Latest Message"</li>
+              <li>The system will retrieve the latest user question from your AnythingLLM workspace</li>
+              <li>Click "Generate Archetypal Agents" to create specialized agents from the four archetypes</li>
+              <li>Only the most relevant agents (Sales, Security, Governance, Marketing) will be generated</li>
+              <li>Each agent provides their optimal thought/response with an importance score (1-10)</li>
+              <li>Upload the agent response system back to AnythingLLM for future use</li>
             </ol>
           </CardContent>
         </Card>
 
-        {/* Conversation Data Display */}
-        {conversationData && (
+        {/* User Message Display */}
+        {userMessage && (
           <Card className="mb-8">
             <CardHeader>
               <CardTitle className="flex items-center">
                 <MessageSquare className="h-6 w-6 mr-2" />
-                Analyzed Conversation
+                User Question from Workspace: {workspaceSlug}
+                {fetchAnalysis && (
+                  <Badge className={`ml-2 ${getSourceColor(fetchAnalysis.source)}`} variant="secondary">
+                    {fetchAnalysis.source}
+                  </Badge>
+                )}
               </CardTitle>
-              <CardDescription>Latest conversation fetched from AnythingLLM</CardDescription>
+              <CardDescription>The question that archetypal agents will provide optimal responses for</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <pre className="text-sm whitespace-pre-wrap max-h-60 overflow-y-auto">{conversationData}</pre>
+              <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-400">
+                <p className="text-gray-800 font-medium">{userMessage}</p>
               </div>
             </CardContent>
           </Card>
@@ -512,8 +677,8 @@ export default function AgentsPage() {
         {conversationInsights && (
           <Card className="mb-8">
             <CardHeader>
-              <CardTitle>Conversation Analysis Insights</CardTitle>
-              <CardDescription>Key findings from the conversation analysis</CardDescription>
+              <CardTitle>Question Analysis Insights</CardTitle>
+              <CardDescription>Key findings from analyzing the user's question</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -529,7 +694,7 @@ export default function AgentsPage() {
                   </ul>
                 </div>
                 <div>
-                  <h4 className="font-semibold mb-2 text-orange-700">Response Gaps Found</h4>
+                  <h4 className="font-semibold mb-2 text-orange-700">Response Areas Needed</h4>
                   <ul className="text-sm space-y-1">
                     {conversationInsights.responseGaps.map((gap, index) => (
                       <li key={index} className="flex items-start">
@@ -540,7 +705,7 @@ export default function AgentsPage() {
                   </ul>
                 </div>
                 <div>
-                  <h4 className="font-semibold mb-2 text-blue-700">Conversation Patterns</h4>
+                  <h4 className="font-semibold mb-2 text-blue-700">Question Patterns</h4>
                   <ul className="text-sm space-y-1">
                     {conversationInsights.conversationPatterns.map((pattern, index) => (
                       <li key={index} className="flex items-start">
@@ -572,11 +737,11 @@ export default function AgentsPage() {
             <CardHeader>
               <CardTitle className="flex items-center">
                 <Users className="h-6 w-6 mr-2" />
-                Agent Generation Summary
+                Archetypal Agent Summary
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div className="text-center">
                   <div className="text-3xl font-bold text-blue-600">{agents.length}</div>
                   <div className="text-gray-600">Agents Generated</div>
@@ -585,13 +750,21 @@ export default function AgentsPage() {
                   <div className="text-3xl font-bold text-green-600">
                     {agents.filter((a) => a.status === "active").length}
                   </div>
-                  <div className="text-gray-600">Ready for Deployment</div>
+                  <div className="text-gray-600">Active Agents</div>
                 </div>
                 <div className="text-center">
                   <div className="text-3xl font-bold text-purple-600">
                     {agents.reduce((acc, agent) => acc + agent.expertise.length, 0)}
                   </div>
                   <div className="text-gray-600">Expertise Areas</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-orange-600">
+                    {agents.length > 0
+                      ? (agents.reduce((acc, agent) => acc + agent.importanceScore, 0) / agents.length).toFixed(1)
+                      : 0}
+                  </div>
+                  <div className="text-gray-600">Avg Importance</div>
                 </div>
               </div>
             </CardContent>
@@ -602,8 +775,10 @@ export default function AgentsPage() {
         {agenticFlow && (
           <Card className="mb-8">
             <CardHeader>
-              <CardTitle>Agent Interaction Flow</CardTitle>
-              <CardDescription>How these agents will work together to improve conversations</CardDescription>
+              <CardTitle>Agent Collaboration Flow</CardTitle>
+              <CardDescription>
+                How these archetypal agents work together to provide comprehensive answers
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="prose max-w-none">
@@ -613,7 +788,7 @@ export default function AgentsPage() {
           </Card>
         )}
 
-        {/* Agents Grid */}
+        {/* Agents Grid with Importance Scores */}
         {agents.length > 0 && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {agents.map((agent) => (
@@ -622,12 +797,17 @@ export default function AgentsPage() {
                   <div className="flex items-start justify-between">
                     <div>
                       <CardTitle className="flex items-center">
+                        <span className="text-2xl mr-2">{getAgentIcon(agent.name)}</span>
                         <Bot className="h-5 w-5 mr-2 text-blue-600" />
                         {agent.name}
                       </CardTitle>
                       <CardDescription>{agent.type}</CardDescription>
                     </div>
                     <div className="flex items-center space-x-2">
+                      <Badge className={getImportanceColor(agent.importanceScore)}>
+                        <Star className="h-3 w-3 mr-1" />
+                        {agent.importanceScore}/10
+                      </Badge>
                       {getStatusIcon(agent.status)}
                       <Badge className={getStatusColor(agent.status)}>{agent.status}</Badge>
                     </div>
@@ -635,6 +815,15 @@ export default function AgentsPage() {
                 </CardHeader>
                 <CardContent>
                   <p className="text-gray-600 mb-4">{agent.description}</p>
+
+                  {/* Optimal Thought - New prominent section */}
+                  <div className="mb-4 p-4 bg-yellow-50 border-l-4 border-yellow-400 rounded-r-lg">
+                    <h4 className="font-semibold mb-2 text-yellow-800 flex items-center">
+                      <Lightbulb className="h-4 w-4 mr-2" />
+                      Optimal Thought:
+                    </h4>
+                    <p className="text-sm text-yellow-900 leading-relaxed">{agent.optimalThought}</p>
+                  </div>
 
                   <div className="mb-4">
                     <h4 className="font-semibold mb-2">Personality:</h4>
@@ -665,7 +854,7 @@ export default function AgentsPage() {
                   </div>
 
                   <div>
-                    <h4 className="font-semibold mb-2">Conversation Mapping:</h4>
+                    <h4 className="font-semibold mb-2">Response Focus:</h4>
                     <ul className="text-sm text-gray-600 space-y-1">
                       {agent.conversationMapping.map((mapping, index) => (
                         <li key={index} className="flex items-start">
@@ -687,7 +876,7 @@ export default function AgentsPage() {
             <CardHeader>
               <CardTitle>Next Steps</CardTitle>
               <CardDescription>
-                Upload your conversation-based agents to AnythingLLM or proceed to create workflow orchestration.
+                Upload your archetypal agent response system to AnythingLLM or proceed to create workflow orchestration.
               </CardDescription>
             </CardHeader>
             <CardContent>

@@ -80,8 +80,6 @@ export class AnythingLLMClient {
   private apiKey: string
   private baseUrl: string
   private organizationId?: string
-  static getWorkspaceChats: any
-  static testConnection: any
 
   constructor(config: AnythingLLMConfig) {
     this.apiKey = config.apiKey
@@ -102,6 +100,7 @@ export class AnythingLLMClient {
     const headers: HeadersInit = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.apiKey}`,
+      accept: "application/json",
     }
 
     if (this.organizationId) {
@@ -130,6 +129,7 @@ export class AnythingLLMClient {
         ok: response.ok,
         headers: Object.fromEntries(response.headers.entries()),
         bodyLength: responseText.length,
+        bodyPreview: responseText.substring(0, 500),
       })
 
       if (!response.ok) {
@@ -401,6 +401,174 @@ export class AnythingLLMClient {
   }
 
   /**
+   * Get chats from a specific workspace
+   */
+  async getWorkspaceChats(workspaceSlug: string): Promise<any> {
+    console.log(`💬 Getting chats for workspace: ${workspaceSlug}`)
+
+    try {
+      const chats = await this.makeRequest<any>(`/api/v1/workspace/${workspaceSlug}/chats`)
+      console.log("📊 Raw chats response:", chats)
+      return chats
+    } catch (error) {
+      console.error(`❌ Failed to get chats for workspace ${workspaceSlug}:`, error)
+      throw error
+    }
+  }
+
+  /**
+   * Get the latest conversation from a workspace
+   */
+  async getLatestConversation(workspaceSlug: string): Promise<{
+    success: boolean
+    latestMessage?: string
+    conversation?: any[]
+    message: string
+    debugInfo?: any
+  }> {
+    console.log(`🔍 Fetching latest conversation from workspace: ${workspaceSlug}`)
+
+    try {
+      const chatsResponse = await this.getWorkspaceChats(workspaceSlug)
+
+      console.log("📊 Chats response structure:", {
+        type: typeof chatsResponse,
+        isArray: Array.isArray(chatsResponse),
+        keys: chatsResponse ? Object.keys(chatsResponse) : [],
+        length: Array.isArray(chatsResponse) ? chatsResponse.length : "N/A",
+      })
+
+      // Handle different possible response structures
+      let chats = []
+
+      if (Array.isArray(chatsResponse)) {
+        chats = chatsResponse
+      } else if (chatsResponse && chatsResponse.chats && Array.isArray(chatsResponse.chats)) {
+        chats = chatsResponse.chats
+      } else if (chatsResponse && chatsResponse.data && Array.isArray(chatsResponse.data)) {
+        chats = chatsResponse.data
+      } else if (chatsResponse && typeof chatsResponse === "object") {
+        // If it's an object, try to find an array property
+        const possibleArrayKeys = ["chats", "data", "messages", "conversations", "history"]
+        for (const key of possibleArrayKeys) {
+          if (chatsResponse[key] && Array.isArray(chatsResponse[key])) {
+            chats = chatsResponse[key]
+            break
+          }
+        }
+      }
+
+      console.log(`📋 Processed chats array:`, {
+        length: chats.length,
+        firstItem: chats.length > 0 ? chats[0] : null,
+        lastItem: chats.length > 0 ? chats[chats.length - 1] : null,
+      })
+
+      if (!chats || chats.length === 0) {
+        return {
+          success: false,
+          message: "No conversations found in workspace",
+          debugInfo: {
+            workspace: workspaceSlug,
+            rawResponse: chatsResponse,
+            processedChats: chats,
+          },
+        }
+      }
+
+      // Get the most recent chat (last item in array)
+      const latestChat = chats[chats.length - 1]
+      console.log("📝 Latest chat object:", latestChat)
+
+      // Extract the user message from various possible structures
+      let latestUserMessage = ""
+
+      // Try different possible field names for the user message
+      const possibleMessageFields = [
+        "prompt",
+        "message",
+        "content",
+        "text",
+        "query",
+        "input",
+        "user_message",
+        "userMessage",
+        "question",
+        "request",
+      ]
+
+      for (const field of possibleMessageFields) {
+        if (latestChat[field] && typeof latestChat[field] === "string") {
+          latestUserMessage = latestChat[field]
+          console.log(`✅ Found user message in field '${field}':`, latestUserMessage.substring(0, 100))
+          break
+        }
+      }
+
+      // If no direct field found, try to look in nested objects
+      if (!latestUserMessage) {
+        if (latestChat.messages && Array.isArray(latestChat.messages)) {
+          // Look for user messages in messages array
+          const userMessages = latestChat.messages.filter(
+            (msg: any) => msg.role === "user" || msg.type === "user" || msg.sender === "user",
+          )
+          if (userMessages.length > 0) {
+            const lastUserMsg = userMessages[userMessages.length - 1]
+            latestUserMessage = lastUserMsg.content || lastUserMsg.message || lastUserMsg.text || ""
+          }
+        }
+      }
+
+      // If still no message found, try to extract from any string field
+      if (!latestUserMessage) {
+        for (const [key, value] of Object.entries(latestChat)) {
+          if (typeof value === "string" && value.length > 10) {
+            latestUserMessage = value
+            console.log(`🔍 Using field '${key}' as fallback message:`, latestUserMessage.substring(0, 100))
+            break
+          }
+        }
+      }
+
+      if (!latestUserMessage) {
+        return {
+          success: false,
+          message: "Could not extract user message from latest conversation",
+          debugInfo: {
+            workspace: workspaceSlug,
+            latestChat: latestChat,
+            availableFields: Object.keys(latestChat),
+          },
+        }
+      }
+
+      return {
+        success: true,
+        latestMessage: latestUserMessage,
+        conversation: chats,
+        message: "Successfully retrieved latest conversation",
+        debugInfo: {
+          workspace: workspaceSlug,
+          chatCount: chats.length,
+          extractedFrom: "API",
+          messageLength: latestUserMessage.length,
+        },
+      }
+    } catch (error) {
+      console.error("❌ Failed to get latest conversation:", error)
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to fetch conversation",
+        debugInfo: {
+          workspace: workspaceSlug,
+          error: error instanceof Error ? error.message : "Unknown error",
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+      }
+    }
+  }
+
+  /**
    * Validate workflow with AnythingLLM
    */
   async validateWorkflow(workflowPayload: any): Promise<WorkflowValidationResult> {
@@ -629,282 +797,3 @@ export async function testDocumentUpload(
 
   return client.uploadDocument(content, fileName)
 }
-
-
-
-
-
-
-
-// /**
-//  * AnythingLLM API Client
-//  *
-//  * This client handles all interactions with the AnythingLLM API for agent deployment
-//  * and workflow orchestration.
-//  */
-// import { getAnythingLLMConfig } from "./api-keys"
-
-// export interface AnythingLLMConfig {
-//   apiKey: string
-//   baseUrl: string
-//   organizationId?: string
-// }
-
-// export interface Agent {
-//   id: string
-//   name: string
-//   type: string
-//   description: string
-//   responsibilities: string[]
-//   okrMapping: string[]
-//   status: string
-// }
-
-// export interface WorkflowStep {
-//   id: string
-//   agent: string
-//   action: string
-//   description: string
-//   triggers: string[]
-//   outputs: string[]
-//   approvals?: string[]
-// }
-
-// export interface DeploymentResult {
-//   success: boolean
-//   deploymentId?: string
-//   message: string
-//   agents: {
-//     id: string
-//     name: string
-//     status: string
-//   }[]
-//   errors?: any[]
-// }
-
-// export interface WorkflowValidationResult {
-//   success: boolean
-//   validationResult?: any
-//   agentResponses?: Array<{
-//     name: string
-//     response: string
-//     confidence: number
-//     alignment: number
-//     recommendations: string[]
-//   }>
-//   alignmentScore?: number
-//   recommendations?: string[]
-//   error?: string
-// }
-
-// export class AnythingLLMClient {
-//   private apiKey: string
-//   private baseUrl: string
-//   private organizationId?: string
-
-//   constructor(config: AnythingLLMConfig) {
-//     this.apiKey = config.apiKey
-//     this.baseUrl = config.baseUrl.endsWith("/") ? config.baseUrl.slice(0, -1) : config.baseUrl
-//     this.organizationId = config.organizationId
-//   }
-
-//   private async makeRequest<T>(endpoint: string, method = "GET", data?: any): Promise<T> {
-//     const url = `${this.baseUrl}${endpoint}`
-
-//     const headers: HeadersInit = {
-//       "Content-Type": "application/json",
-//       Authorization: `Bearer ${this.apiKey}`,
-//     }
-
-//     if (this.organizationId) {
-//       headers["X-Organization-ID"] = this.organizationId
-//     }
-
-//     const options: RequestInit = {
-//       method,
-//       headers,
-//       body: data ? JSON.stringify(data) : undefined,
-//     }
-
-//     const response = await fetch(url, options)
-
-//     if (!response.ok) {
-//       const errorData = await response.json().catch(() => ({}))
-//       throw new Error(`AnythingLLM API Error: ${response.status} ${response.statusText} - ${JSON.stringify(errorData)}`)
-//     }
-
-//     return response.json()
-//   }
-
-//   /**
-//    * Test the API connection
-//    */
-//   async testConnection(): Promise<{ success: boolean; message: string }> {
-//     try {
-//       await this.makeRequest<{ status: string }>("/api/v1/status")
-//       return { success: true, message: "Successfully connected to AnythingLLM API" }
-//     } catch (error) {
-//       return {
-//         success: false,
-//         message: error instanceof Error ? error.message : "Failed to connect to AnythingLLM API",
-//       }
-//     }
-//   }
-
-//   /**
-//    * Validate workflow with AnythingLLM
-//    */
-//   async validateWorkflow(workflowPayload: any): Promise<WorkflowValidationResult> {
-//     try {
-//       const response = await this.makeRequest<any>("/api/v1/workflows/validate", "POST", workflowPayload)
-
-//       return {
-//         success: true,
-//         validationResult: response,
-//         agentResponses: response.agentResponses || [],
-//         alignmentScore: response.alignmentScore || 0,
-//         recommendations: response.recommendations || [],
-//       }
-//     } catch (error) {
-//       return {
-//         success: false,
-//         error: error instanceof Error ? error.message : "Failed to validate workflow",
-//         agentResponses: [],
-//         alignmentScore: 0,
-//         recommendations: [],
-//       }
-//     }
-//   }
-
-//   /**
-//    * Deploy agents and workflow to AnythingLLM
-//    */
-//   async deployWorkflow(
-//     agents: Agent[],
-//     workflowSteps: WorkflowStep[],
-//     workflowDescription: string,
-//     workflowName: string,
-//   ): Promise<DeploymentResult> {
-//     try {
-//       // First, create or update the agents
-//       const deployedAgents = await this.deployAgents(agents)
-
-//       // Then, create the workflow with the deployed agents
-//       const workflow = await this.makeRequest<any>("/api/v1/workflows", "POST", {
-//         name: workflowName,
-//         description: workflowDescription,
-//         agents: deployedAgents.map((agent) => agent.id),
-//         steps: workflowSteps.map((step) => ({
-//           agentId: deployedAgents.find((a) => a.name === step.agent)?.id,
-//           action: step.action,
-//           description: step.description,
-//           triggers: step.triggers,
-//           outputs: step.outputs,
-//           approvals: step.approvals || [],
-//         })),
-//       })
-
-//       return {
-//         success: true,
-//         deploymentId: workflow.id,
-//         message: "Workflow successfully deployed to AnythingLLM",
-//         agents: deployedAgents,
-//       }
-//     } catch (error) {
-//       return {
-//         success: false,
-//         message: error instanceof Error ? error.message : "Failed to deploy workflow",
-//         agents: [],
-//         errors: [error],
-//       }
-//     }
-//   }
-
-//   /**
-//    * Deploy agents to AnythingLLM
-//    */
-//   private async deployAgents(agents: Agent[]): Promise<{ id: string; name: string; status: string }[]> {
-//     const deployedAgents = []
-
-//     for (const agent of agents) {
-//       // Check if agent already exists
-//       const existingAgents = await this.makeRequest<any[]>(`/api/v1/agents?name=${encodeURIComponent(agent.name)}`)
-
-//       let deployedAgent
-//       if (existingAgents.length > 0) {
-//         // Update existing agent
-//         deployedAgent = await this.makeRequest<any>(`/api/v1/agents/${existingAgents[0].id}`, "PUT", {
-//           name: agent.name,
-//           type: agent.type,
-//           description: agent.description,
-//           responsibilities: agent.responsibilities,
-//           metadata: {
-//             okrMapping: agent.okrMapping,
-//           },
-//         })
-//       } else {
-//         // Create new agent
-//         deployedAgent = await this.makeRequest<any>("/api/v1/agents", "POST", {
-//           name: agent.name,
-//           type: agent.type,
-//           description: agent.description,
-//           responsibilities: agent.responsibilities,
-//           metadata: {
-//             okrMapping: agent.okrMapping,
-//           },
-//         })
-//       }
-
-//       deployedAgents.push({
-//         id: deployedAgent.id,
-//         name: deployedAgent.name,
-//         status: deployedAgent.status || "active",
-//       })
-//     }
-
-//     return deployedAgents
-//   }
-
-//   /**
-//    * Get workflow status
-//    */
-//   async getWorkflowStatus(workflowId: string): Promise<any> {
-//     return this.makeRequest<any>(`/api/v1/workflows/${workflowId}`)
-//   }
-
-//   /**
-//    * Get all workflows
-//    */
-//   async getWorkflows(): Promise<any[]> {
-//     return this.makeRequest<any[]>("/api/v1/workflows")
-//   }
-// }
-
-// // Create a singleton instance for use throughout the app
-// let clientInstance: AnythingLLMClient | null = null
-
-// export function getAnythingLLMClient(): AnythingLLMClient | null {
-//   return clientInstance
-// }
-
-// export function initializeAnythingLLMClient(config?: AnythingLLMConfig): AnythingLLMClient | null {
-//   // If config is provided, use it
-//   if (config) {
-//     clientInstance = new AnythingLLMClient(config)
-//     return clientInstance
-//   }
-
-//   // Otherwise, try to initialize from stored settings
-//   const storedConfig = getAnythingLLMConfig()
-//   if (storedConfig.apiKey && storedConfig.baseUrl) {
-//     clientInstance = new AnythingLLMClient({
-//       apiKey: storedConfig.apiKey,
-//       baseUrl: storedConfig.baseUrl,
-//       organizationId: storedConfig.organizationId,
-//     })
-//     return clientInstance
-//   }
-
-//   // If no config available, return null
-//   return null
-// }
