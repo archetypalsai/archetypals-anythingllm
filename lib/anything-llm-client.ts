@@ -80,6 +80,8 @@ export class AnythingLLMClient {
   private apiKey: string
   private baseUrl: string
   private organizationId?: string
+  static getWorkspaceChats: any
+  static testConnection: any
 
   constructor(config: AnythingLLMConfig) {
     this.apiKey = config.apiKey

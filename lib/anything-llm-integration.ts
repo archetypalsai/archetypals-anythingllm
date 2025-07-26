@@ -1,12 +1,10 @@
 /**
  * Enhanced AnythingLLM Integration
- * Captures responses and integrates with thinking agents
- * Uses the exact same logic as the reference LangFlow component
- * Modified to fetch only the latest conversation
+ * Captures responses and processes conversations independently
+ * Removed thinking-agent.ts dependency
  */
 
 import { getAnythingLLMConfig } from "./api-keys"
-import { thinkingAgentManager } from "./thinking-agent"
 
 export interface AnythingLLMResponse {
   id: string
@@ -24,19 +22,21 @@ export interface ChatHistory {
   lastUpdated: Date
 }
 
-export interface ChatPair {
-  chat_id: number
-  user_message: string
-  assistant_message: string
-  message_type: string
-  timestamp: string
-  sources: any[]
+export interface ConversationAnalysis {
+  messageCount: number
+  userMessages: number
+  assistantMessages: number
+  averageResponseLength: number
+  sourceCount: number
+  lastActivity: Date
+  quality: "excellent" | "good" | "basic"
 }
 
 export class AnythingLLMIntegration {
   private baseUrl: string
   private apiKey: string
   private chatHistories: Map<string, ChatHistory> = new Map()
+  private analysisResults: Map<string, ConversationAnalysis> = new Map()
 
   constructor() {
     // Default to the provided configuration
@@ -68,58 +68,133 @@ export class AnythingLLMIntegration {
   }
 
   /**
-   * Filter chats using the exact same logic as the reference LangFlow component
-   * Returns only the latest conversation
+   * Analyze conversation quality and generate insights
    */
-  private filterChats(history: any[]): ChatPair[] {
-    const chatPairs: { [key: number]: { user: any; assistant: any } } = {}
+  private analyzeConversation(messages: AnythingLLMResponse[], workspaceId: string): ConversationAnalysis {
+    const userMessages = messages.filter((m) => m.type === "user")
+    const assistantMessages = messages.filter((m) => m.type === "response")
 
-    // Sort messages by sentAt timestamp (same as reference code)
-    for (const msg of history.sort((a, b) => (a.sentAt || 0) - (b.sentAt || 0))) {
-      const chatId = msg.chatId
-      if (!chatId) continue
+    const totalResponseLength = assistantMessages.reduce((sum, msg) => sum + msg.content.length, 0)
+    const averageResponseLength = assistantMessages.length > 0 ? totalResponseLength / assistantMessages.length : 0
 
-      if (!chatPairs[chatId]) {
-        chatPairs[chatId] = { user: null, assistant: null }
-      }
+    const totalSources = assistantMessages.reduce((sum, msg) => {
+      return sum + (msg.metadata?.sources?.length || 0)
+    }, 0)
 
-      if (msg.role === "user") {
-        chatPairs[chatId].user = {
-          content: msg.content || "",
-          timestamp: msg.sentAt,
-        }
-      } else if (msg.type === "chat" || msg.type === "query") {
-        chatPairs[chatId].assistant = {
-          content: msg.content || "",
-          type: msg.type,
-          sources: msg.sources || [],
-        }
-      }
+    // Determine quality based on response length and source usage
+    let quality: "excellent" | "good" | "basic" = "basic"
+    if (averageResponseLength > 200 && totalSources > 0) {
+      quality = "excellent"
+    } else if (averageResponseLength > 100 || totalSources > 0) {
+      quality = "good"
     }
 
-    // Convert to array format (same as reference code)
-    const allPairs = Object.entries(chatPairs)
-      .map(([chatId, msgs]) => ({
-        chat_id: Number.parseInt(chatId),
-        user_message: msgs.user?.content || "",
-        assistant_message: msgs.assistant?.content || "",
-        message_type: msgs.assistant?.type || "chat",
-        timestamp: new Date((msgs.user?.timestamp || 0) * 1000).toISOString(),
-        sources: msgs.assistant?.sources || [],
-      }))
-      .filter((pair) => pair.user_message && pair.assistant_message)
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    const analysis: ConversationAnalysis = {
+      messageCount: messages.length,
+      userMessages: userMessages.length,
+      assistantMessages: assistantMessages.length,
+      averageResponseLength,
+      sourceCount: totalSources,
+      lastActivity: messages.length > 0 ? messages[messages.length - 1].timestamp : new Date(),
+      quality,
+    }
 
-    // Return only the latest conversation
-    return allPairs.length > 0 ? [allPairs[0]] : []
+    // Cache the analysis
+    this.analysisResults.set(workspaceId, analysis)
+
+    console.log("📊 Conversation analysis completed:", {
+      workspaceId,
+      ...analysis,
+    })
+
+    return analysis
+  }
+
+  /**
+   * Process messages and generate insights
+   */
+  private processMessagesWithAnalysis(messages: AnythingLLMResponse[], workspaceId: string): void {
+    console.log(`🧠 Processing ${messages.length} messages with built-in analysis`)
+
+    // Get the latest user message and assistant response
+    const recentMessages = messages.slice(-10) // Last 10 messages
+    const userMessages = recentMessages.filter((m) => m.type === "user")
+    const assistantMessages = recentMessages.filter((m) => m.type === "response")
+
+    if (userMessages.length === 0 && assistantMessages.length === 0) {
+      console.log("ℹ️ No recent messages to process")
+      return
+    }
+
+    // Analyze user messages
+    if (userMessages.length > 0) {
+      const latestUserMessage = userMessages[userMessages.length - 1]
+      console.log("🔍 User message analysis:", {
+        messageLength: latestUserMessage.content.length,
+        wordCount: latestUserMessage.content.split(" ").length,
+        complexity: latestUserMessage.content.split(" ").length > 10 ? "high" : "low",
+        hasQuestions: latestUserMessage.content.includes("?"),
+        intent: this.detectIntent(latestUserMessage.content),
+      })
+    }
+
+    // Analyze assistant responses
+    if (assistantMessages.length > 0) {
+      const latestAssistantMessage = assistantMessages[assistantMessages.length - 1]
+      console.log("📊 Assistant response evaluation:", {
+        responseLength: latestAssistantMessage.content.length,
+        sourceCount: latestAssistantMessage.metadata?.sources?.length || 0,
+        quality: latestAssistantMessage.metadata?.sources?.length > 0 ? "good" : "basic",
+        completeness: latestAssistantMessage.content.length > 100 ? "comprehensive" : "brief",
+        hasStructure: this.hasStructuredContent(latestAssistantMessage.content),
+      })
+    }
+
+    // Generate overall conversation analysis
+    this.analyzeConversation(messages, workspaceId)
+  }
+
+  /**
+   * Simple intent detection based on keywords
+   */
+  private detectIntent(message: string): string {
+    const lowerMessage = message.toLowerCase()
+
+    if (lowerMessage.includes("how") || lowerMessage.includes("what") || lowerMessage.includes("why")) {
+      return "information_seeking"
+    } else if (lowerMessage.includes("help") || lowerMessage.includes("problem") || lowerMessage.includes("issue")) {
+      return "support_request"
+    } else if (lowerMessage.includes("create") || lowerMessage.includes("make") || lowerMessage.includes("build")) {
+      return "creation_request"
+    } else if (
+      lowerMessage.includes("explain") ||
+      lowerMessage.includes("describe") ||
+      lowerMessage.includes("tell me")
+    ) {
+      return "explanation_request"
+    }
+
+    return "general_inquiry"
+  }
+
+  /**
+   * Check if content has structured elements
+   */
+  private hasStructuredContent(content: string): boolean {
+    return (
+      content.includes("\n") ||
+      content.includes("•") ||
+      content.includes("-") ||
+      content.includes("1.") ||
+      content.includes("*")
+    )
   }
 
   /**
    * Fetch chat history from AnythingLLM workspace
-   * Returns only the latest conversation
    */
   async fetchChatHistory(workspaceId: string): Promise<ChatHistory> {
-    console.log(`📥 Fetching latest conversation for workspace: ${workspaceId}`)
+    console.log(`📥 Fetching chat history for workspace: ${workspaceId}`)
 
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/workspace/${workspaceId}/chats`, {
@@ -137,21 +212,12 @@ export class AnythingLLMIntegration {
       const data = await response.json()
       console.log("📊 Raw chat data received:", {
         workspaceId,
-        hasHistory: !!data.history,
-        historyLength: data.history ? data.history.length : 0,
+        messageCount: Array.isArray(data) ? data.length : "unknown",
         dataType: typeof data,
       })
 
-      // Validate response format
-      if (!data.history || !Array.isArray(data.history)) {
-        throw new Error("Invalid response format - missing 'history' array")
-      }
-
-      // Filter chats to get only the latest conversation
-      const filteredChatPairs = this.filterChats(data.history)
-
-      // Convert to AnythingLLMResponse format
-      const messages = this.processChatPairs(filteredChatPairs, workspaceId)
+      // Process the chat data
+      const messages = this.processChatData(data, workspaceId)
 
       const chatHistory: ChatHistory = {
         workspaceId,
@@ -162,10 +228,10 @@ export class AnythingLLMIntegration {
       // Cache the history
       this.chatHistories.set(workspaceId, chatHistory)
 
-      // Process messages with thinking agents
-      await this.processMessagesWithThinkingAgents(messages, workspaceId)
+      // Process messages with built-in analysis
+      this.processMessagesWithAnalysis(messages, workspaceId)
 
-      console.log(`✅ Processed latest conversation with ${messages.length} messages for workspace ${workspaceId}`)
+      console.log(`✅ Processed ${messages.length} messages for workspace ${workspaceId}`)
       return chatHistory
     } catch (error) {
       console.error(`❌ Error fetching chat history for ${workspaceId}:`, error)
@@ -173,127 +239,75 @@ export class AnythingLLMIntegration {
     }
   }
 
-  private processChatPairs(chatPairs: ChatPair[], workspaceId: string): AnythingLLMResponse[] {
+  private processChatData(data: any, workspaceId: string): AnythingLLMResponse[] {
     const messages: AnythingLLMResponse[] = []
 
-    // Only process the latest conversation (first item since it's sorted newest first)
-    const latestPair = chatPairs[0]
-    if (!latestPair) return messages
+    try {
+      // Handle different possible data structures from AnythingLLM
+      let chatData = data
+      if (Array.isArray(data)) {
+        chatData = data
+      } else if (data.chats && Array.isArray(data.chats)) {
+        chatData = data.chats
+      } else if (data.messages && Array.isArray(data.messages)) {
+        chatData = data.messages
+      } else if (data.history && Array.isArray(data.history)) {
+        chatData = data.history
+      }
 
-    console.log("🔍 Processing latest conversation:", {
-      chatId: latestPair.chat_id,
-      userMessageLength: latestPair.user_message.length,
-      assistantMessageLength: latestPair.assistant_message.length,
-      sourceCount: latestPair.sources.length,
-    })
+      if (!Array.isArray(chatData)) {
+        console.warn("⚠️ Unexpected chat data structure:", typeof chatData)
+        return messages
+      }
 
-    // Create user message
-    if (latestPair.user_message) {
-      messages.push({
-        id: `${latestPair.chat_id}_user`,
-        type: "user",
-        content: latestPair.user_message,
-        timestamp: new Date(latestPair.timestamp),
-        workspaceId: workspaceId,
-        sessionId: latestPair.chat_id.toString(),
-        metadata: {
-          chatId: latestPair.chat_id,
-          messageType: "user_message",
-          sources: [],
-        },
+      chatData.forEach((item: any, index: number) => {
+        try {
+          // Handle different message formats
+          const messageId = item.id || item._id || `msg_${Date.now()}_${index}`
+          const content = item.content || item.message || item.text || ""
+          const type = item.type || (item.role === "user" ? "user" : "response")
+          const timestamp = item.timestamp
+            ? new Date(item.timestamp)
+            : item.createdAt
+              ? new Date(item.createdAt)
+              : item.created_at
+                ? new Date(item.created_at)
+                : new Date()
+
+          if (content) {
+            messages.push({
+              id: messageId,
+              type: type as "user" | "response",
+              content,
+              timestamp,
+              workspaceId,
+              sessionId: item.sessionId || item.session_id,
+              metadata: {
+                originalItem: item,
+                processed: true,
+                sources: item.sources || [],
+              },
+            })
+          }
+        } catch (itemError) {
+          console.warn("⚠️ Error processing chat item:", itemError, item)
+        }
       })
-    }
 
-    // Create assistant message
-    if (latestPair.assistant_message) {
-      messages.push({
-        id: `${latestPair.chat_id}_assistant`,
-        type: "response",
-        content: latestPair.assistant_message,
-        timestamp: new Date(latestPair.timestamp),
-        workspaceId: workspaceId,
-        sessionId: latestPair.chat_id.toString(),
-        metadata: {
-          chatId: latestPair.chat_id,
-          messageType: latestPair.message_type,
-          sources: latestPair.sources,
-        },
-      })
+      // Sort messages by timestamp
+      messages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+    } catch (error) {
+      console.error("❌ Error processing chat data:", error)
     }
 
     return messages
   }
 
-  private async processMessagesWithThinkingAgents(messages: AnythingLLMResponse[], workspaceId: string): Promise<void> {
-    console.log(`🧠 Processing latest conversation with thinking agents`)
-
-    const userMessages = messages.filter((m) => m.type === "user")
-    const assistantMessages = messages.filter((m) => m.type === "response")
-
-    if (userMessages.length === 0 && assistantMessages.length === 0) {
-      console.log("ℹ️ No messages to process")
-      return
-    }
-
-    // Get active thinking agents
-    const activeAgents = thinkingAgentManager.getActiveAgents()
-
-    for (const agent of activeAgents) {
-      try {
-        // Set workspace context for agent
-        agent.workspaceId = workspaceId
-
-        // Generate thoughts about the user prompt
-        if (userMessages.length > 0) {
-          const userMessage = userMessages[0]
-
-          await thinkingAgentManager.generatePreActionThoughts(agent.id, {
-            action: "analyze_latest_user_prompt",
-            context: {
-              userPrompt: userMessage.content,
-              workspaceId,
-              metadata: userMessage.metadata,
-              chatId: userMessage.metadata?.chatId,
-              isLatestConversation: true,
-            },
-            actionResult: function (actionResult: any, arg1: null, arg2: number): unknown {
-              throw new Error("Function not implemented.")
-            }
-          })
-        }
-
-        // Generate thoughts about the assistant response
-        if (assistantMessages.length > 0) {
-          const assistantMessage = assistantMessages[0]
-
-          await thinkingAgentManager.generatePostActionThoughts(
-            agent.id,
-            {
-              action: "evaluate_latest_assistant_response",
-              context: {
-                assistantResponse: assistantMessage.content,
-                workspaceId,
-                metadata: assistantMessage.metadata,
-                chatId: assistantMessage.metadata?.chatId,
-                sources: assistantMessage.metadata?.sources,
-                isLatestConversation: true,
-              },
-              actionResult: function (actionResult: any, arg1: null, arg2: number): unknown {
-                throw new Error("Function not implemented.")
-              }
-            },
-            {
-              responseQuality: assistantMessage.metadata?.sources?.length > 0 ? "excellent" : "good",
-              userSatisfaction: 0.9,
-              sourceCount: assistantMessage.metadata?.sources?.length || 0,
-              responseLength: assistantMessage.content.length,
-            },
-          )
-        }
-      } catch (error) {
-        console.error(`❌ Error processing messages with agent ${agent.id}:`, error)
-      }
-    }
+  /**
+   * Get conversation analysis results
+   */
+  getConversationAnalysis(workspaceId: string): ConversationAnalysis | undefined {
+    return this.analysisResults.get(workspaceId)
   }
 
   /**
@@ -315,7 +329,7 @@ export class AnythingLLMIntegration {
    * Monitor workspace for new messages (polling)
    */
   async startMonitoring(workspaceId: string, intervalMs = 30000): Promise<void> {
-    console.log(`👁️ Starting monitoring for latest conversations in workspace: ${workspaceId}`)
+    console.log(`👁️ Starting monitoring for workspace: ${workspaceId}`)
 
     const monitor = async () => {
       try {

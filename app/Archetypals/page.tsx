@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -20,25 +20,44 @@ import {
   Loader2,
   TestTube,
   Info,
+  MessageSquare,
+  Zap,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
-import { generateAgentsFromOKRs, uploadAgentFlowToAnythingLLM, testAnythingLLMConnection } from "@/lib/agent-generator"
+import {
+  generateAgentsFromConversation,
+  uploadAgentFlowToAnythingLLM,
+  testAnythingLLMConnection,
+  fetchAndAnalyzeLatestConversation,
+} from "@/lib/agent-generator"
 import { isOpenAIConfigured, isAnythingLLMConfigured } from "@/lib/api-keys"
 
 interface Agent {
   id: string
-  name: "SecurityAgent" | "MarketingAgent" | "GovernanceAgent" | "SalesAgent"
+  name: string
   type: string
   description: string
   responsibilities: string[]
-  okrMapping: string[]
-  status: "ready" | "pending" | "disabled"
+  conversationMapping: string[]
+  status: "active" | "pending" | "offline"
+  expertise: string[]
+  personality: string
+}
+
+interface ConversationInsights {
+  userNeeds: string[]
+  responseGaps: string[]
+  conversationPatterns: string[]
+  recommendedAgentTypes: string[]
 }
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [agenticFlow, setAgenticFlow] = useState<string>("")
-  const [isGenerating, setIsGenerating] = useState(true)
+  const [conversationInsights, setConversationInsights] = useState<ConversationInsights | null>(null)
+  const [conversationData, setConversationData] = useState<string>("")
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [isFetching, setIsFetching] = useState(false)
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [isUploading, setIsUploading] = useState(false)
@@ -57,16 +76,56 @@ export default function AgentsPage() {
   const router = useRouter()
   const { toast } = useToast()
 
-  useEffect(() => {
-    generateAgents()
-  }, [])
-
-  const generateAgents = async () => {
-    if (!isOpenAIConfigured()) {
-      setError("OpenAI API key is not configured. Please configure it in the settings.")
-      setIsGenerating(false)
+  const fetchLatestConversation = async () => {
+    if (!isAnythingLLMConfigured()) {
+      setError("AnythingLLM is not configured. Please configure it in the settings.")
       return
     }
+
+    setIsFetching(true)
+    setError(null)
+
+    try {
+      const { conversationData, analysis } = await fetchAndAnalyzeLatestConversation()
+      setConversationData(conversationData)
+
+      toast({
+        title: "Conversation Fetched",
+        description: "Successfully retrieved the latest conversation from AnythingLLM.",
+      })
+
+      console.log("📊 Conversation analysis:", analysis)
+    } catch (error) {
+      console.error("Error fetching conversation:", error)
+      setError(error instanceof Error ? error.message : "Failed to fetch conversation")
+      toast({
+        title: "Fetch Failed",
+        description: error instanceof Error ? error.message : "Failed to fetch conversation",
+        variant: "destructive",
+      })
+    } finally {
+      setIsFetching(false)
+    }
+  }
+
+  const generateAgents = async () => {
+    if (!conversationData) {
+      toast({
+        title: "No Conversation Data",
+        description: "Please fetch a conversation first before generating agents.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!isOpenAIConfigured()) {
+      setError("OpenAI API key is not configured. Please configure it in the settings.")
+      return
+    }
+
+    setIsGenerating(true)
+    setError(null)
+    setProgress(0)
 
     const progressInterval = setInterval(() => {
       setProgress((prev) => {
@@ -79,27 +138,31 @@ export default function AgentsPage() {
     }, 300)
 
     try {
-      // Try to get conversation data from AnythingLLM integration
-      const conversationData = sessionStorage.getItem("anythingllm-responses") || sessionStorage.getItem("okrData") // Fallback to old data
-      const parsedData = conversationData ? JSON.parse(conversationData) : null
-
-      const { agents: generatedAgents, agenticFlow } = await generateAgentsFromOKRs(
-        parsedData?.content || "Sample conversation analysis for agent generation",
-      )
+      const result = await generateAgentsFromConversation(conversationData)
 
       setProgress(100)
       setTimeout(() => {
-        setAgents(generatedAgents)
-        setAgenticFlow(agenticFlow)
+        setAgents(result.agents)
+        setAgenticFlow(result.agenticFlow)
+        setConversationInsights(result.conversationInsights)
         setIsGenerating(false)
+
+        toast({
+          title: "Agents Generated",
+          description: `Successfully generated ${result.agents.length} archetypal agents based on conversation analysis.`,
+        })
       }, 500)
     } catch (error) {
       console.error("Error generating agents:", error)
       setError(error instanceof Error ? error.message : "Failed to generate agents")
-      setAgents(sampleAgents)
-      setAgenticFlow("Sample agentic flow for testing purposes.")
       setIsGenerating(false)
       setProgress(100)
+
+      toast({
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : "Failed to generate agents",
+        variant: "destructive",
+      })
     }
 
     clearInterval(progressInterval)
@@ -162,17 +225,26 @@ export default function AgentsPage() {
       return
     }
 
+    if (!agents.length || !conversationInsights) {
+      toast({
+        title: "No Agents to Upload",
+        description: "Please generate agents first before uploading.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setIsUploading(true)
     setUploadStatus(null)
 
     try {
-      const result = await uploadAgentFlowToAnythingLLM(agenticFlow, agents)
+      const result = await uploadAgentFlowToAnythingLLM(agenticFlow, agents, conversationInsights)
       setUploadStatus(result)
 
       if (result.success) {
         toast({
           title: "Upload Successful",
-          description: "Agent Interaction Flow has been uploaded to AnythingLLM.",
+          description: "Conversation-based Agent System has been uploaded to AnythingLLM.",
         })
       } else {
         toast({
@@ -197,68 +269,9 @@ export default function AgentsPage() {
     }
   }
 
-  const sampleAgents: Agent[] = [
-    {
-      id: "sales-agent",
-      name: "SalesAgent",
-      type: "Revenue Generation",
-      description: "Focuses on customer acquisition, pricing optimization, and revenue growth strategies.",
-      responsibilities: [
-        "Monitor sales pipeline and conversion rates",
-        "Recommend pricing adjustments based on market data",
-        "Identify high-value customer segments",
-        "Coordinate with marketing for lead generation",
-      ],
-      okrMapping: ["Increase revenue by 25%", "Acquire 1000 new customers"],
-      status: "ready",
-    },
-    {
-      id: "marketing-agent",
-      name: "MarketingAgent",
-      type: "Brand & Growth",
-      description: "Manages campaign execution, brand positioning, and customer engagement strategies.",
-      responsibilities: [
-        "Execute multi-channel marketing campaigns",
-        "Monitor brand sentiment and engagement",
-        "Optimize customer acquisition costs",
-        "Coordinate product launch communications",
-      ],
-      okrMapping: ["Launch 3 new product features", "Improve customer retention to 95%"],
-      status: "ready",
-    },
-    {
-      id: "governance-agent",
-      name: "GovernanceAgent",
-      type: "Compliance & Risk",
-      description: "Ensures regulatory compliance, risk management, and approval workflows.",
-      responsibilities: [
-        "Review and approve strategic initiatives",
-        "Monitor compliance with regulations",
-        "Assess risk factors for new projects",
-        "Maintain audit trails and documentation",
-      ],
-      okrMapping: ["Enhance operational efficiency", "Reduce compliance risks by 40%"],
-      status: "ready",
-    },
-    {
-      id: "security-agent",
-      name: "SecurityAgent",
-      type: "Security & Privacy",
-      description: "Monitors security protocols, data privacy, and threat detection.",
-      responsibilities: [
-        "Conduct security assessments for new features",
-        "Monitor data privacy compliance",
-        "Detect and respond to security threats",
-        "Validate security protocols before rollouts",
-      ],
-      okrMapping: ["Improve system security score to 95%", "Zero security incidents"],
-      status: "ready",
-    },
-  ]
-
   const getStatusIcon = (status: Agent["status"]) => {
     switch (status) {
-      case "ready":
+      case "active":
         return <CheckCircle className="h-5 w-5 text-green-600" />
       case "pending":
         return <Clock className="h-5 w-5 text-yellow-600" />
@@ -269,7 +282,7 @@ export default function AgentsPage() {
 
   const getStatusColor = (status: Agent["status"]) => {
     switch (status) {
-      case "ready":
+      case "active":
         return "bg-green-100 text-green-800"
       case "pending":
         return "bg-yellow-100 text-yellow-800"
@@ -278,7 +291,7 @@ export default function AgentsPage() {
     }
   }
 
-  if (error) {
+  if (error && !conversationData) {
     return (
       <div className="min-h-screen bg-gray-50">
         <header className="border-b bg-white">
@@ -288,8 +301,8 @@ export default function AgentsPage() {
                 ← Back
               </Button>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Agent Generation</h1>
-                <p className="text-gray-600">Generate AI agents based on conversation analysis</p>
+                <h1 className="text-2xl font-bold text-gray-900">Conversation-Based Agent Generation</h1>
+                <p className="text-gray-600">Generate AI agents based on AnythingLLM conversation analysis</p>
               </div>
             </div>
           </div>
@@ -298,8 +311,8 @@ export default function AgentsPage() {
         <div className="container mx-auto px-4 py-8">
           <Card className="max-w-2xl mx-auto">
             <CardHeader>
-              <CardTitle>API Configuration Required</CardTitle>
-              <CardDescription>An error occurred while generating agents</CardDescription>
+              <CardTitle>Configuration Required</CardTitle>
+              <CardDescription>An error occurred while setting up the agent generation system</CardDescription>
             </CardHeader>
             <CardContent>
               <Alert variant="destructive" className="mb-6">
@@ -323,15 +336,15 @@ export default function AgentsPage() {
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <Bot className="h-12 w-12 text-blue-600 mx-auto mb-4" />
-            <CardTitle>Generating AI Agents</CardTitle>
-            <CardDescription>Analyzing your OKRs and creating archetypal agents...</CardDescription>
+            <CardTitle>Generating Conversation-Based Agents</CardTitle>
+            <CardDescription>Analyzing conversation patterns and creating specialized agents...</CardDescription>
           </CardHeader>
           <CardContent>
             <Progress value={progress} className="mb-4" />
             <p className="text-sm text-gray-600 text-center">
-              {progress < 30 && "Parsing OKR structure..."}
-              {progress >= 30 && progress < 60 && "Identifying key objectives..."}
-              {progress >= 60 && progress < 90 && "Generating agent archetypes..."}
+              {progress < 30 && "Analyzing conversation patterns..."}
+              {progress >= 30 && progress < 60 && "Identifying user needs and gaps..."}
+              {progress >= 60 && progress < 90 && "Generating specialized agents..."}
               {progress >= 90 && "Finalizing agent configurations..."}
             </p>
           </CardContent>
@@ -343,14 +356,41 @@ export default function AgentsPage() {
   return (
     <div className="flex flex-1 flex-col">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Generated Agents</h1>
-        <p className="text-gray-600">AI-generated archetypal agents based on AnythingLLM conversation analysis</p>
+        <h1 className="text-2xl font-bold text-gray-900">Conversation-Based Agent Generation</h1>
+        <p className="text-gray-600">
+          Analyze conversations from AnythingLLM and generate specialized agents to improve future interactions
+        </p>
       </div>
 
+      {/* Action Buttons */}
       <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900"></h1>
-          <p className="text-gray-600"></p>
+        <div className="flex gap-2">
+          <Button onClick={fetchLatestConversation} disabled={isFetching} variant="outline">
+            {isFetching ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <MessageSquare className="h-4 w-4 mr-2" />
+                Fetch Latest Conversation
+              </>
+            )}
+          </Button>
+          <Button onClick={generateAgents} disabled={!conversationData || isGenerating}>
+            {isGenerating ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <Zap className="h-4 w-4 mr-2" />
+                Generate Agents
+              </>
+            )}
+          </Button>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleTestConnection} disabled={isTesting}>
@@ -366,7 +406,7 @@ export default function AgentsPage() {
               </>
             )}
           </Button>
-          <Button variant="outline" onClick={handleUploadToAnythingLLM} disabled={isUploading}>
+          <Button variant="outline" onClick={handleUploadToAnythingLLM} disabled={isUploading || !agents.length}>
             {isUploading ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -379,9 +419,11 @@ export default function AgentsPage() {
               </>
             )}
           </Button>
-          <Button onClick={() => router.push("/workflow")}>
-            Create Workflow <ArrowRight className="ml-2 h-4 w-4" />
-          </Button>
+          {agents.length > 0 && (
+            <Button onClick={() => router.push("/workflow")}>
+              Create Workflow <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -429,175 +471,271 @@ export default function AgentsPage() {
           </Alert>
         )}
 
-        {/* Testing Instructions */}
+        {/* Instructions */}
         <Card className="mb-8 border-blue-200 bg-blue-50">
           <CardHeader>
             <CardTitle className="flex items-center text-blue-800">
               <Info className="h-5 w-5 mr-2" />
-              Testing Instructions
+              How It Works
             </CardTitle>
           </CardHeader>
           <CardContent className="text-blue-700">
             <ol className="list-decimal list-inside space-y-2 text-sm">
-              <li>First, click "Test Connection" to verify your AnythingLLM API configuration</li>
-              <li>If the connection test passes, click "Upload to AnythingLLM" to upload the agent flow</li>
-              <li>Check the debug information in the alerts above for detailed logs</li>
-              <li>Open your browser's developer console (F12) to see additional logging</li>
-              <li>Verify the document appears in your AnythingLLM instance</li>
+              <li>Click "Fetch Latest Conversation" to retrieve the most recent conversation from AnythingLLM</li>
+              <li>Review the conversation data and click "Generate Agents" to create specialized agents</li>
+              <li>The AI will analyze the conversation to identify user needs, response gaps, and improvement areas</li>
+              <li>Specialized agents will be generated with specific expertise to address these needs</li>
+              <li>Upload the agent system back to AnythingLLM for future use</li>
             </ol>
           </CardContent>
         </Card>
 
-        {/* Summary */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <Users className="h-6 w-6 mr-2" />
-              Agent Generation Summary
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="text-center">
-                <div className="text-3xl font-bold text-blue-600">{agents.length}</div>
-                <div className="text-gray-600">Agents Generated</div>
+        {/* Conversation Data Display */}
+        {conversationData && (
+          <Card className="mb-8">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <MessageSquare className="h-6 w-6 mr-2" />
+                Analyzed Conversation
+              </CardTitle>
+              <CardDescription>Latest conversation fetched from AnythingLLM</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <pre className="text-sm whitespace-pre-wrap max-h-60 overflow-y-auto">{conversationData}</pre>
               </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-green-600">
-                  {agents.filter((a) => a.status === "ready").length}
-                </div>
-                <div className="text-gray-600">Ready for Deployment</div>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-purple-600">
-                  {agents.reduce((acc, agent) => acc + agent.okrMapping.length, 0)}
-                </div>
-                <div className="text-gray-600">OKRs Mapped</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
 
-        {/* Agentic Flow */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Agent Interaction Flow</CardTitle>
-            <CardDescription>How these agents will work together to achieve your OKRs</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="prose max-w-none">
-              {agenticFlow ? (
-                <p className="text-gray-700 leading-relaxed">{agenticFlow}</p>
-              ) : (
-                <p className="text-gray-500">No interaction flow description available.</p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Agents Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {agents.map((agent) => (
-            <Card key={agent.id} className="hover:shadow-lg transition-shadow">
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="flex items-center">
-                      <Bot className="h-5 w-5 mr-2 text-blue-600" />
-                      {agent.name}
-                    </CardTitle>
-                    <CardDescription>{agent.type}</CardDescription>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    {getStatusIcon(agent.status)}
-                    <Badge className={getStatusColor(agent.status)}>{agent.status}</Badge>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-gray-600 mb-4">{agent.description}</p>
-
-                <div className="mb-4">
-                  <h4 className="font-semibold mb-2">Key Responsibilities:</h4>
-                  <ul className="text-sm text-gray-600 space-y-1">
-                    {agent.responsibilities.map((responsibility, index) => (
+        {/* Conversation Insights */}
+        {conversationInsights && (
+          <Card className="mb-8">
+            <CardHeader>
+              <CardTitle>Conversation Analysis Insights</CardTitle>
+              <CardDescription>Key findings from the conversation analysis</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <h4 className="font-semibold mb-2 text-green-700">User Needs Identified</h4>
+                  <ul className="text-sm space-y-1">
+                    {conversationInsights.userNeeds.map((need, index) => (
                       <li key={index} className="flex items-start">
-                        <span className="text-blue-600 mr-2">•</span>
-                        {responsibility}
+                        <span className="text-green-600 mr-2">•</span>
+                        {need}
                       </li>
                     ))}
                   </ul>
                 </div>
-
                 <div>
-                  <h4 className="font-semibold mb-2">Mapped OKRs:</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {agent.okrMapping.map((okr, index) => (
-                      <Badge key={index} variant="outline" className="text-xs">
-                        {okr}
-                      </Badge>
+                  <h4 className="font-semibold mb-2 text-orange-700">Response Gaps Found</h4>
+                  <ul className="text-sm space-y-1">
+                    {conversationInsights.responseGaps.map((gap, index) => (
+                      <li key={index} className="flex items-start">
+                        <span className="text-orange-600 mr-2">•</span>
+                        {gap}
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                <div>
+                  <h4 className="font-semibold mb-2 text-blue-700">Conversation Patterns</h4>
+                  <ul className="text-sm space-y-1">
+                    {conversationInsights.conversationPatterns.map((pattern, index) => (
+                      <li key={index} className="flex items-start">
+                        <span className="text-blue-600 mr-2">•</span>
+                        {pattern}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <h4 className="font-semibold mb-2 text-purple-700">Recommended Agent Types</h4>
+                  <ul className="text-sm space-y-1">
+                    {conversationInsights.recommendedAgentTypes.map((type, index) => (
+                      <li key={index} className="flex items-start">
+                        <span className="text-purple-600 mr-2">•</span>
+                        {type}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Summary */}
+        {agents.length > 0 && (
+          <Card className="mb-8">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Users className="h-6 w-6 mr-2" />
+                Agent Generation Summary
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-blue-600">{agents.length}</div>
+                  <div className="text-gray-600">Agents Generated</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-green-600">
+                    {agents.filter((a) => a.status === "active").length}
+                  </div>
+                  <div className="text-gray-600">Ready for Deployment</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-purple-600">
+                    {agents.reduce((acc, agent) => acc + agent.expertise.length, 0)}
+                  </div>
+                  <div className="text-gray-600">Expertise Areas</div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Agentic Flow */}
+        {agenticFlow && (
+          <Card className="mb-8">
+            <CardHeader>
+              <CardTitle>Agent Interaction Flow</CardTitle>
+              <CardDescription>How these agents will work together to improve conversations</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="prose max-w-none">
+                <p className="text-gray-700 leading-relaxed">{agenticFlow}</p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Agents Grid */}
+        {agents.length > 0 && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {agents.map((agent) => (
+              <Card key={agent.id} className="hover:shadow-lg transition-shadow">
+                <CardHeader>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <CardTitle className="flex items-center">
+                        <Bot className="h-5 w-5 mr-2 text-blue-600" />
+                        {agent.name}
+                      </CardTitle>
+                      <CardDescription>{agent.type}</CardDescription>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {getStatusIcon(agent.status)}
+                      <Badge className={getStatusColor(agent.status)}>{agent.status}</Badge>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-gray-600 mb-4">{agent.description}</p>
+
+                  <div className="mb-4">
+                    <h4 className="font-semibold mb-2">Personality:</h4>
+                    <p className="text-sm text-gray-600">{agent.personality}</p>
+                  </div>
+
+                  <div className="mb-4">
+                    <h4 className="font-semibold mb-2">Areas of Expertise:</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {agent.expertise.map((exp, index) => (
+                        <Badge key={index} variant="secondary" className="text-xs">
+                          {exp}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <h4 className="font-semibold mb-2">Key Responsibilities:</h4>
+                    <ul className="text-sm text-gray-600 space-y-1">
+                      {agent.responsibilities.map((responsibility, index) => (
+                        <li key={index} className="flex items-start">
+                          <span className="text-blue-600 mr-2">•</span>
+                          {responsibility}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div>
+                    <h4 className="font-semibold mb-2">Conversation Mapping:</h4>
+                    <ul className="text-sm text-gray-600 space-y-1">
+                      {agent.conversationMapping.map((mapping, index) => (
+                        <li key={index} className="flex items-start">
+                          <span className="text-green-600 mr-2">•</span>
+                          {mapping}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
 
         {/* Next Steps */}
-        <Card className="mt-8">
-          <CardHeader>
-            <CardTitle>Next Steps</CardTitle>
-            <CardDescription>
-              Test the connection and upload your Agent Interaction Flow to AnythingLLM, or proceed to create the
-              workflow orchestration.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col sm:flex-row gap-4">
-              <Button
-                onClick={handleTestConnection}
-                variant="outline"
-                disabled={isTesting}
-                className="flex-1 bg-transparent"
-              >
-                {isTesting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Testing Connection...
-                  </>
-                ) : (
-                  <>
-                    <TestTube className="mr-2 h-4 w-4" />
-                    Test AnythingLLM Connection
-                  </>
-                )}
-              </Button>
-              <Button
-                onClick={handleUploadToAnythingLLM}
-                variant="outline"
-                disabled={isUploading}
-                className="flex-1 bg-transparent"
-              >
-                {isUploading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Uploading to AnythingLLM...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="mr-2 h-4 w-4" />
-                    Upload to AnythingLLM
-                  </>
-                )}
-              </Button>
-              {/* <Button onClick={() => router.push("/workflow")} className="flex-1">
-                <ArrowRight className="mr-2 h-4 w-4" />
-                Create Agentic Workflow
-              </Button> */}
-            </div>
-          </CardContent>
-        </Card>
+        {agents.length > 0 && (
+          <Card className="mt-8">
+            <CardHeader>
+              <CardTitle>Next Steps</CardTitle>
+              <CardDescription>
+                Upload your conversation-based agents to AnythingLLM or proceed to create workflow orchestration.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col sm:flex-row gap-4">
+                <Button
+                  onClick={handleTestConnection}
+                  variant="outline"
+                  disabled={isTesting}
+                  className="flex-1 bg-transparent"
+                >
+                  {isTesting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Testing Connection...
+                    </>
+                  ) : (
+                    <>
+                      <TestTube className="mr-2 h-4 w-4" />
+                      Test AnythingLLM Connection
+                    </>
+                  )}
+                </Button>
+                <Button
+                  onClick={handleUploadToAnythingLLM}
+                  variant="outline"
+                  disabled={isUploading}
+                  className="flex-1 bg-transparent"
+                >
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Uploading to AnythingLLM...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="mr-2 h-4 w-4" />
+                      Upload Agent System
+                    </>
+                  )}
+                </Button>
+                <Button onClick={() => router.push("/workflow")} className="flex-1">
+                  <ArrowRight className="mr-2 h-4 w-4" />
+                  Create Agentic Workflow
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   )

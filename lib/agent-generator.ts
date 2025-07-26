@@ -1,29 +1,38 @@
+"use client"
+
 import { generateObject } from "ai"
 import { z } from "zod"
 import { createOpenAI } from "@ai-sdk/openai"
 import { getOpenAIApiKey, isOpenAIConfigured } from "./api-keys"
 import { getAnythingLLMClient } from "./anything-llm-client"
+import { anythingLLMIntegration } from "./anything-llm-integration"
 
 const agentGenerationSchema = z.object({
   agents: z
     .array(
       z.object({
         id: z.string().default(() => Math.random().toString(36).substring(2, 9)),
-        name: z
-          .enum(["SecurityAgent", "MarketingAgent", "GovernanceAgent", "SalesAgent"])
-          .describe("Name of the AI agent archetype"),
-        type: z.string().default("general"),
-        description: z.string().default(""),
+        name: z.string().describe("Name of the AI agent archetype based on conversation analysis"),
+        type: z.string().describe("Type/category of the agent based on conversation needs"),
+        description: z.string().describe("Detailed description of the agent's purpose and capabilities"),
         responsibilities: z.array(z.string()).describe("List of primary tasks or responsibilities for this agent"),
-        okrMapping: z.array(z.string()).default([]),
+        conversationMapping: z.array(z.string()).describe("How this agent relates to the analyzed conversation"),
         status: z.enum(["active", "pending", "offline"]).default("active"),
+        expertise: z.array(z.string()).describe("Areas of expertise derived from conversation analysis"),
+        personality: z.string().describe("Agent personality traits based on conversation context"),
       }),
     )
     .min(1, "At least one agent must be generated"),
-  agenticFlow: z.string().describe("Description of how agents interact to achieve OKRs"),
+  agenticFlow: z.string().describe("Description of how agents interact based on conversation patterns"),
+  conversationInsights: z.object({
+    userNeeds: z.array(z.string()).describe("Identified user needs from the conversation"),
+    responseGaps: z.array(z.string()).describe("Areas where the response could be improved"),
+    conversationPatterns: z.array(z.string()).describe("Patterns identified in the conversation"),
+    recommendedAgentTypes: z.array(z.string()).describe("Types of agents that would improve this conversation"),
+  }),
 })
 
-export async function generateAgentsFromOKRs(okrContent: string) {
+export async function generateAgentsFromConversation(conversationData: string) {
   try {
     if (!isOpenAIConfigured()) {
       throw new Error("OpenAI API key is not configured. Please configure it in the settings.")
@@ -45,12 +54,33 @@ export async function generateAgentsFromOKRs(okrContent: string) {
     const result = await generateObject({
       model: openai("gpt-4o"),
       schema: agentGenerationSchema,
-      system: `You are an AI system that analyzes OKRs (Objectives and Key Results) and generates archetypal agents for workflow orchestration.`,
-      prompt: `Analyze these OKRs and generate appropriate archetypal agents with their interaction flow:
+      system: `You are an AI system that analyzes conversations and generates archetypal agents that would improve future similar conversations.
 
-${okrContent}
+Your task is to:
+1. Analyze the conversation to understand user needs, response quality, and interaction patterns
+2. Identify gaps or areas for improvement in the conversation
+3. Generate archetypal agents that would address these needs and improve the conversation quality
+4. Create agents with specific expertise, personalities, and responsibilities based on the conversation context
 
-Generate agents that would be most effective for achieving these objectives through coordinated workflow orchestration. Return ONLY the JSON object matching the required schema.`,
+Focus on creating agents that would:
+- Better understand user intent and emotional state
+- Provide more comprehensive and accurate responses
+- Offer specialized expertise in relevant domains
+- Improve overall conversation flow and user satisfaction`,
+      prompt: `Analyze this conversation and generate appropriate archetypal agents that would improve similar conversations:
+
+${conversationData}
+
+Based on this conversation, generate agents that would:
+1. Better address the user's specific needs and questions
+2. Provide more comprehensive responses with better sources
+3. Improve emotional intelligence and user satisfaction
+4. Offer specialized expertise in the relevant domains
+5. Enhance overall conversation quality and flow
+
+Generate agents with distinct personalities, expertise areas, and responsibilities that complement each other to create a comprehensive conversation improvement system.
+
+Return ONLY the JSON object matching the required schema.`,
       signal: controller.signal,
     })
 
@@ -65,7 +95,7 @@ Generate agents that would be most effective for achieving these objectives thro
 
     return validation.data
   } catch (error) {
-    console.error("Error in generateAgentsFromOKRs:", error)
+    console.error("Error in generateAgentsFromConversation:", error)
     // Handle specific error cases
     if (error instanceof Error) {
       if (error.name === "AbortError") {
@@ -86,6 +116,7 @@ Generate agents that would be most effective for achieving these objectives thro
 export async function uploadAgentFlowToAnythingLLM(
   agenticFlow: string,
   agents: any[],
+  conversationInsights: any,
   workspaceId?: string,
 ): Promise<{ success: boolean; message: string; documentId?: string; debugInfo?: any }> {
   console.log("🚀 Starting upload to AnythingLLM using client...")
@@ -97,12 +128,26 @@ export async function uploadAgentFlowToAnythingLLM(
     }
 
     // Create a comprehensive document content
-    const documentContent = `# Agent Interaction Flow - ${new Date().toLocaleDateString()}
+    const documentContent = `# Conversation-Based Agent System - ${new Date().toLocaleDateString()}
 
 ## Executive Summary
-This document contains AI-generated archetypal agents and their interaction flow designed to achieve specific OKRs through coordinated workflow orchestration.
+This document contains AI-generated archetypal agents designed to improve conversation quality based on analysis of actual user interactions. These agents are specifically tailored to address identified gaps and enhance user experience.
 
-## Generated Agents (${agents.length} total)
+## Conversation Analysis Insights
+
+### User Needs Identified
+${conversationInsights.userNeeds.map((need: string) => `• ${need}`).join("\n")}
+
+### Response Gaps Found
+${conversationInsights.responseGaps.map((gap: string) => `• ${gap}`).join("\n")}
+
+### Conversation Patterns
+${conversationInsights.conversationPatterns.map((pattern: string) => `• ${pattern}`).join("\n")}
+
+### Recommended Agent Types
+${conversationInsights.recommendedAgentTypes.map((type: string) => `• ${type}`).join("\n")}
+
+## Generated Archetypal Agents (${agents.length} total)
 ${agents
   .map(
     (agent, index) => `
@@ -110,12 +155,16 @@ ${agents
 - **Type**: ${agent.type}
 - **Description**: ${agent.description}
 - **Status**: ${agent.status}
+- **Personality**: ${agent.personality}
+
+**Areas of Expertise:**
+${agent.expertise.map((exp: string) => `  • ${exp}`).join("\n")}
 
 **Key Responsibilities:**
 ${agent.responsibilities.map((resp: string) => `  • ${resp}`).join("\n")}
 
-**OKR Mapping:**
-${agent.okrMapping.length > 0 ? agent.okrMapping.map((okr: string) => `  • ${okr}`).join("\n") : "  • No specific OKRs mapped"}
+**Conversation Mapping:**
+${agent.conversationMapping.map((mapping: string) => `  • ${mapping}`).join("\n")}
 
 ---
 `,
@@ -125,21 +174,26 @@ ${agent.okrMapping.length > 0 ? agent.okrMapping.map((okr: string) => `  • ${o
 ## Agent Interaction Flow
 ${agenticFlow}
 
-## Implementation Guidelines
-1. **Agent Coordination**: Each agent operates within its defined scope while maintaining communication with other agents
-2. **OKR Alignment**: All agent activities should directly contribute to the mapped OKRs
-3. **Workflow Orchestration**: Agents should follow the interaction flow to ensure optimal coordination
-4. **Performance Monitoring**: Regular assessment of agent performance against OKR targets
+## Implementation Strategy
+1. **Conversation Analysis**: Each agent analyzes incoming conversations based on their expertise
+2. **Collaborative Response**: Agents work together to provide comprehensive, well-rounded responses
+3. **Continuous Learning**: Agents adapt based on conversation outcomes and user feedback
+4. **Quality Assurance**: Multi-agent review ensures response accuracy and completeness
+
+## Performance Metrics
+- **Agent Count**: ${agents.length}
+- **Total Expertise Areas**: ${agents.reduce((acc, agent) => acc + agent.expertise.length, 0)}
+- **Total Responsibilities**: ${agents.reduce((acc, agent) => acc + agent.responsibilities.length, 0)}
+- **Conversation Mappings**: ${agents.reduce((acc, agent) => acc + agent.conversationMapping.length, 0)}
 
 ## Technical Metadata
 - **Generated**: ${new Date().toISOString()}
-- **Agent Count**: ${agents.length}
-- **Total Responsibilities**: ${agents.reduce((acc, agent) => acc + agent.responsibilities.length, 0)}
-- **Total OKR Mappings**: ${agents.reduce((acc, agent) => acc + agent.okrMapping.length, 0)}
+- **Source**: Conversation Analysis
+- **Agent Generation Method**: AI-powered analysis of user interactions
 - **Document Version**: 1.0
 `
 
-    const fileName = `agent-interaction-flow-${Date.now()}.md`
+    const fileName = `conversation-based-agents-${Date.now()}.md`
 
     // Use the client's upload method
     const result = await client.uploadDocument(documentContent, fileName, "text/markdown", workspaceId)
@@ -191,72 +245,40 @@ export async function testAnythingLLMConnection(): Promise<{
   }
 }
 
+// Function to fetch and analyze latest conversation from AnythingLLM
+export async function fetchAndAnalyzeLatestConversation(workspaceId = "default"): Promise<{
+  conversationData: string
+  analysis: {
+    userMessage: string
+    assistantResponse: string
+    sources: any[]
+    timestamp: string
+    conversationId: string
+  }
+}> {
+  console.log("📥 Fetching latest conversation from AnythingLLM...")
 
+  try {
+    // Use the AnythingLLM integration to fetch the latest conversation
+    const conversation = await anythingLLMIntegration.fetchLatestConversation(workspaceId)
 
+    // Format the conversation data for analysis
+    const conversationData = anythingLLMIntegration.formatConversationForAnalysis(conversation)
 
+    console.log("✅ Successfully fetched and formatted conversation data")
 
-//////// with old schema
-// import { generateObject } from "ai"
-// import { z } from "zod"
-// import { createOpenAI } from "@ai-sdk/openai"
-// import { getOpenAIApiKey, isOpenAIConfigured } from "./api-keys"
-
-// // Make schema more flexible with optional fields and defaults
-// const AgentSchema = z.object({
-//   agents: z.array(
-//     z.object({
-//       id: z.string().default(() => Math.random().toString(36).substring(2, 9)),
-//       name: z.string().min(2),
-//       type: z.string().default("general"),
-//       description: z.string().default(""),
-//       responsibilities: z.array(z.string()).default([]),
-//       okrMapping: z.array(z.string()).default([]),
-//       status: z.enum(["ready", "pending", "disabled"]).default("ready"),
-//     })
-//   ).min(1, "At least one agent must be generated")
-// })
-
-// export async function generateAgentsFromOKRs(okrContent: string) {
-//   try {
-//     if (!isOpenAIConfigured()) {
-//       throw new Error("OpenAI API key is not configured. Please configure it in the settings.")
-//     }
-
-//     const apiKey = getOpenAIApiKey()
-//     if (!apiKey) {
-//       throw new Error("OpenAI API key is missing")
-//     }
-
-//     const openai = createOpenAI({ apiKey })
-
-//     const result = await generateObject({
-//       model: openai("gpt-4o"),
-//       schema: AgentSchema,
-//       system: `You are an AI system that analyzes OKRs (Objectives and Key Results) and generates archetypal agents for workflow orchestration. 
-
-// Based on the provided OKRs, generate 3-5 specialized agents that would be most effective for achieving these objectives. Each agent should have:
-// - A clear archetypal name (e.g., SalesAgent, MarketingAgent, SecurityAgent, GovernanceAgent)
-// - Specific responsibilities aligned with the OKRs
-// - Clear mapping to relevant objectives and key results
-
-// Respond with ONLY the JSON object matching the required schema.`,
-//       prompt: `Analyze these OKRs and generate appropriate archetypal agents:
-
-// ${okrContent}
-
-// Generate agents that would be most effective for achieving these objectives through coordinated workflow orchestration. Return ONLY the JSON object matching the required schema.`,
-//     })
-
-//     // Validate the response
-//     const validation = AgentSchema.safeParse(result.object)
-//     if (!validation.success) {
-//       console.error("Schema validation failed:", validation.error)
-//       throw new Error("The generated agents didn't match the expected format")
-//     }
-
-//     return validation.data.agents
-//   } catch (error) {
-//     console.error("Error generating agents:", error)
-//     throw new Error(`Failed to generate agents: ${error instanceof Error ? error.message : String(error)}`)
-//   }
-// }
+    return {
+      conversationData,
+      analysis: {
+        userMessage: conversation.userMessage,
+        assistantResponse: conversation.assistantResponse,
+        sources: conversation.sources,
+        timestamp: conversation.timestamp,
+        conversationId: conversation.conversationId,
+      },
+    }
+  } catch (error) {
+    console.error("❌ Error fetching conversation:", error)
+    throw new Error(`Failed to fetch conversation: ${error instanceof Error ? error.message : "Unknown error"}`)
+  }
+}
